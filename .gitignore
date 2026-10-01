@@ -1,0 +1,23 @@
+# .NET build output
+bin/
+obj/
+artifacts/
+publish/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+TestResults/
+*.binlog
+
+# Local runtime data
+*.db
+*.db-shm
+*.db-wal
+*.etl
+logs/
+
+# OS
+Thumbs.db
+.DS_Store
