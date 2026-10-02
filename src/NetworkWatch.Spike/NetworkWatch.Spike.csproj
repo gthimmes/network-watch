@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Phase 0: console that prints live process → domain → IP:port. Run elevated. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetworkWatch.Collectors.Windows\NetworkWatch.Collectors.Windows.csproj" />
+  </ItemGroup>
+
+</Project>

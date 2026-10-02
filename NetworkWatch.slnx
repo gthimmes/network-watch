@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NetworkWatch.Collectors.Windows/NetworkWatch.Collectors.Windows.csproj" />
+    <Project Path="src/NetworkWatch.Core/NetworkWatch.Core.csproj" />
+    <Project Path="src/NetworkWatch.Spike/NetworkWatch.Spike.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NetworkWatch.Collectors.Windows.Tests/NetworkWatch.Collectors.Windows.Tests.csproj" />
+    <Project Path="tests/NetworkWatch.Core.Tests/NetworkWatch.Core.Tests.csproj" />
+  </Folder>
+</Solution>
