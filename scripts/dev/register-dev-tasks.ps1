@@ -26,18 +26,20 @@ if (-not $isAdmin) {
 }
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$runner = Join-Path $repo 'scripts\dev\run-spike.ps1'
-
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runner`"" `
-    -WorkingDirectory $repo
 $principal = New-ScheduledTaskPrincipal -UserId $ForUser -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -MultipleInstances IgnoreNew
 
-Register-ScheduledTask -TaskName 'NetworkWatch-Dev-Spike' -TaskPath '\NetworkWatch\' `
-    -Description "Dev only: runs the network-watch ETW spike elevated. Repo: $repo" `
-    -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+function Register-DevTask([string]$name, [string]$runnerScript, [string]$description) {
+    $runner = Join-Path $repo "scripts\dev\$runnerScript"
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runner`"" `
+        -WorkingDirectory $repo
+    Register-ScheduledTask -TaskName $name -TaskPath '\NetworkWatch\' -Description "$description Repo: $repo" `
+        -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+    Write-Host "Registered \NetworkWatch\$name for $ForUser"
+}
 
-Write-Host "Registered \NetworkWatch\NetworkWatch-Dev-Spike for $ForUser (repo: $repo)"
+Register-DevTask 'NetworkWatch-Dev-Spike' 'run-spike.ps1' 'Dev only: runs the network-watch ETW spike elevated.'
+Register-DevTask 'NetworkWatch-Dev-Service' 'run-service-op.ps1' 'Dev only: installs/restarts/uninstalls the NetworkWatch service from the latest publish.'
 exit 0

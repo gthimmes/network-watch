@@ -21,7 +21,9 @@ public sealed class EtwNetworkCollector : ICollector
     private static readonly Guid DnsClientProvider = new("1C95126E-7EEA-49A9-A3FE-A378B03DDB4D");
     private const int DnsQueryCompletedEventId = 3008;
 
-    private readonly ProcessResolver _processes = new();
+    private readonly ProcessResolver _processes;
+
+    public EtwNetworkCollector(ProcessResolver? processes = null) => _processes = processes ?? new ProcessResolver();
 
     public string Name => "Windows ETW";
 
@@ -51,8 +53,8 @@ public sealed class EtwNetworkCollector : ICollector
 
     private void HookKernel(KernelTraceEventParser k, ChannelWriter<NetEvent> sink)
     {
-        k.ProcessStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName);
-        k.ProcessDCStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName);
+        k.ProcessStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName, d.CommandLine);
+        k.ProcessDCStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName, d.CommandLine);
         k.ProcessStop += d => _processes.OnStop(d.ProcessID);
 
         k.TcpIpConnect += d => Emit(sink, d, Protocol.Tcp, Direction.Outbound, d.saddr, d.sport, d.daddr, d.dport, d.size);
@@ -73,10 +75,10 @@ public sealed class EtwNetworkCollector : ICollector
         var process = _processes.Resolve(d.ProcessID, d.ProcessName);
         sink.TryWrite(new ConnectionEvent(
             new DateTimeOffset(d.TimeStamp), d.ProcessID, process.Name, process.Path,
-            protocol, direction, new IPEndPoint(saddr, sport), new IPEndPoint(daddr, dport), size));
+            protocol, direction, new IPEndPoint(saddr, sport), new IPEndPoint(daddr, dport), size, process.CommandLine));
     }
 
-    private static void HookDns(RegisteredTraceEventParser parser, ChannelWriter<NetEvent> sink)
+    private void HookDns(RegisteredTraceEventParser parser, ChannelWriter<NetEvent> sink)
     {
         parser.All += d =>
         {
@@ -86,8 +88,9 @@ public sealed class EtwNetworkCollector : ICollector
                 return;
 
             var addresses = DnsResultParser.Parse(d.PayloadByName("QueryResults") as string);
-            if (addresses.Count > 0)
-                sink.TryWrite(new DnsResolution(new DateTimeOffset(d.TimeStamp), d.ProcessID, name, addresses));
+            if (addresses.Count == 0) return;
+            var process = _processes.Resolve(d.ProcessID);
+            sink.TryWrite(new DnsResolution(new DateTimeOffset(d.TimeStamp), d.ProcessID, name, addresses, process.Name, process.Path));
         };
     }
 }
