@@ -39,6 +39,21 @@ Console.WriteLine();
 var collecting = collector.RunAsync(channel.Writer, cts.Token)
     .ContinueWith(t => { if (t.Exception is not null) Write(ConsoleColor.Red, $"Collector failed: {t.Exception.GetBaseException()}"); channel.Writer.TryComplete(); });
 
+// DNS events come from a separate ETW session and can arrive after the connection they
+// explain (measured: up to ~3s late vs ~0-2s for kernel events), so connections wait
+// briefly before being matched. Ticks flush the buffer when idle.
+var pending = new ReorderBuffer<(ConnectionEvent Conn, AddressScope Scope)>(TimeSpan.FromSeconds(5));
+_ = Task.Run(async () =>
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+    try
+    {
+        while (await timer.WaitForNextTickAsync(cts.Token))
+            channel.Writer.TryWrite(new Tick(DateTimeOffset.Now));
+    }
+    catch (OperationCanceledException) { }
+});
+
 var lastPrune = DateTimeOffset.Now;
 try
 {
@@ -50,26 +65,20 @@ try
                 dnsMap.Record(dns);
                 stats.DnsResolutions++;
                 if (showDns)
-                    Write(ConsoleColor.DarkGray, $"{dns.Time:HH:mm:ss}  DNS          pid {dns.Pid,-6} {dns.QueryName} → {string.Join(", ", dns.Addresses)}");
+                    Write(ConsoleColor.DarkGray, $"{dns.Time:HH:mm:ss}  DNS          pid {dns.Pid,-6} {dns.QueryName} → {string.Join(", ", dns.Addresses)}  (delivered +{(DateTimeOffset.Now - dns.Time).TotalSeconds:F1}s)");
                 break;
 
             case ConnectionEvent c:
                 var scope = IpClassifier.Classify(c.Remote.Address);
-                if (!showAll && scope != AddressScope.Public) break;
-                if (!flows.IsNew(c)) break;
+                if (showAll || scope == AddressScope.Public)
+                    if (flows.IsNew(c))
+                        pending.Add((c, scope), DateTimeOffset.Now);
 
-                var domain = dnsMap.Lookup(c.Remote.Address);
-                stats.Count(c, scope, domain is not null);
-
-                var arrow = c.Direction == Direction.Outbound ? "→" : "←";
-                var dir = c.Direction == Direction.Outbound ? "OUT" : "IN ";
-                var name = domain?.Name ?? (scope == AddressScope.Public ? "(no DNS lookup seen)" : $"({scope})");
-                var color = c.Direction == Direction.Inbound && c.Protocol == Protocol.Tcp ? ConsoleColor.Magenta
-                          : domain is null && scope == AddressScope.Public ? ConsoleColor.Yellow
-                          : ConsoleColor.Gray;
-                Write(color, $"{c.Time:HH:mm:ss}  {dir} {c.Protocol.ToString().ToUpperInvariant(),-4} {Trunc($"{c.ProcessName} ({c.Pid})", 32),-32} {arrow} {c.Remote,-40} {name}");
                 break;
         }
+
+        foreach (var (c, scope) in pending.DrainReady(DateTimeOffset.Now))
+            PrintConnection(c, scope);
 
         if (DateTimeOffset.Now - lastPrune > TimeSpan.FromMinutes(1))
         {
@@ -82,8 +91,27 @@ try
 catch (OperationCanceledException) { }
 
 await collecting;
+// Drain whatever arrived after cancellation (including late DNS answers) before flushing.
+while (channel.Reader.TryRead(out var late))
+    if (late is DnsResolution dns) { dnsMap.Record(dns); stats.DnsResolutions++; }
+foreach (var (c, scope) in pending.DrainAll())
+    PrintConnection(c, scope);
 stats.Print(dnsMap, line => Write(ConsoleColor.White, line));
 return 0;
+
+void PrintConnection(ConnectionEvent c, AddressScope scope)
+{
+    var domain = dnsMap.Lookup(c.Remote.Address);
+    stats.Count(c, scope, domain is not null);
+
+    var arrow = c.Direction == Direction.Outbound ? "→" : "←";
+    var dir = c.Direction == Direction.Outbound ? "OUT" : "IN ";
+    var name = domain?.Name ?? (scope == AddressScope.Public ? "(no DNS lookup seen)" : $"({scope})");
+    var color = c.Direction == Direction.Inbound && c.Protocol == Protocol.Tcp ? ConsoleColor.Magenta
+              : domain is null && scope == AddressScope.Public ? ConsoleColor.Yellow
+              : ConsoleColor.Gray;
+    Write(color, $"{c.Time:HH:mm:ss}  {dir} {c.Protocol.ToString().ToUpperInvariant(),-4} {Trunc($"{c.ProcessName} ({c.Pid})", 32),-32} {arrow} {c.Remote,-40} {name}");
+}
 
 void Write(ConsoleColor color, string line)
 {
@@ -100,6 +128,9 @@ string? OptionValue(string name)
 }
 
 static string Trunc(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+
+/// <summary>Wakes the reader loop so held connections are flushed even when traffic is idle.</summary>
+sealed record Tick(DateTimeOffset At) : NetEvent(At, 0);
 
 sealed class Stats
 {
