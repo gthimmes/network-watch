@@ -21,7 +21,8 @@ public sealed partial class ProcessResolver
 
     public void OnStart(int pid, string imageFileName, string? commandLine, int parentPid = -1)
     {
-        var path = QueryImagePath(pid);
+        // ETW delivers events a second or two late, so very short-lived processes may already be gone.
+        var path = QueryImagePath(pid) ?? PathFromCommandLine(commandLine, imageFileName);
         var parent = parentPid > 0 ? Resolve(parentPid).Name : null;
         _exited.TryRemove(pid, out _);
         _cache[pid] = new ProcessIdentity(path is not null ? System.IO.Path.GetFileName(path) : imageFileName, path,
@@ -57,6 +58,34 @@ public sealed partial class ProcessResolver
                  : !string.IsNullOrEmpty(etwName) ? etwName
                  : $"pid:{pid}";
         return new ProcessIdentity(name, path, null);
+    }
+
+    /// <summary>
+    /// Extracts the executable path from a command line when it's an absolute path to the same
+    /// file name as the image (e.g. <c>"C:\Windows\System32\curl.exe" -s https://…</c>).
+    /// </summary>
+    internal static string? PathFromCommandLine(string? commandLine, string imageFileName)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) return null;
+        var text = commandLine.TrimStart();
+        string candidate;
+        if (text.StartsWith('"'))
+        {
+            var end = text.IndexOf('"', 1);
+            if (end < 0) return null;
+            candidate = text[1..end];
+        }
+        else
+        {
+            var end = text.IndexOf(' ');
+            candidate = end < 0 ? text : text[..end];
+        }
+        candidate = candidate.Replace('/', '\\');
+        if (!System.IO.Path.IsPathFullyQualified(candidate)) return null;
+        if (!System.IO.Path.HasExtension(candidate)) candidate += ".exe";
+        return System.IO.Path.GetFileName(candidate).Equals(imageFileName, StringComparison.OrdinalIgnoreCase) && File.Exists(candidate)
+            ? candidate
+            : null;
     }
 
     /// <summary>

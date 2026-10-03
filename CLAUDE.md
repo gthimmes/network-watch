@@ -14,7 +14,7 @@ Local network-monitoring tool: a Windows service watches every connection (per p
 | Detections #1 threat intel (DNS lookup and connection merge into one alert) | Verified live |
 | #2 untrusted program (unsigned + Temp/Downloads/AppData…) | Verified live |
 | #3 living-off-the-land binaries (+ High if parent is Office/browser/PDF) | Verified live (powershell); certutil is blocked by policy on this PC |
-| #4 direct-to-IP | Unit tests; live check pending |
+| #4 direct-to-IP | Verified live (after the 10-min warm-up) |
 | #5 beaconing | Verified live (fires on the 9th regular connection, 5-min span) |
 | #6 exposure (new listener) | Verified live |
 | #6 exposure (inbound from internet), #7 remote-access tools, #8 network tampering | Unit tests only |
@@ -22,9 +22,11 @@ Local network-monitoring tool: a Windows service watches every connection (per p
 | Firewall block/unblock (rules grouped "NetworkWatch") | Verified live |
 | Trusted-client gate for mutating API commands | Verified live |
 | Local API (named pipe) + `nwctl` CLI | Working |
-| Tray app (icon states, toasts with Block/Trust/Details, dashboard) | Built; first deploy in progress |
+| Tray app (icon states, toasts with Block/Trust/Details, dashboard) | Deployed + autostart (HKCU Run); toast raised but not visually confirmed by owner yet |
 
-Tests: `dotnet test NetworkWatch.slnx` → 65 passing.
+Tests: `dotnet test NetworkWatch.slnx` → 71 passing.
+
+After live testing, the custom list was cleared, test alerts acknowledged and **learning restarted: it ends 2026-10-10 15:16**.
 
 **Owner context:** personal use on the owner's own Windows 11 machine. Other OSes and headless servers come later, so keep the core portable (rules below). The owner runs the Windscribe VPN (WireGuard) and qBittorrent, which shape what "normal" looks like.
 
@@ -98,6 +100,8 @@ dotnet publish tools\NetworkWatch.TrafficGen -c Release -o $env:TEMP\nwtest
 - **Legitimate direct-to-IP traffic exists on the owner's PC.** qBittorrent (P2P) and the Windscribe VPN endpoint connect straight to IPs. The direct-IP detector learns these during the learning period.
 - **The VPN sinkholes some domains.** Windscribe answers `0.0.0.0` for some domains. A malicious-domain lookup answered with 0.0.0.0 is downgraded to Medium ("your DNS filter blocked it").
 - **`certutil.exe` is blocked from running** on this PC (Defender ASR / policy).
+- **Short-lived processes can exit before their start event is processed.** The path then falls back to the command line (`ProcessResolver.PathFromCommandLine`), otherwise path and signature are unknown.
+- **Git Bash's own `curl.exe` (mingw) is unsigned**, so it correctly raises "untrusted program" (Medium) once.
 
 ## Gotchas
 
@@ -108,7 +112,7 @@ dotnet publish tools\NetworkWatch.TrafficGen -c Release -o $env:TEMP\nwtest
 
 ## Known gaps / next steps
 
-1. Live-verify direct-IP and beaconing. Exercise the tray toasts and buttons.
+1. Owner to confirm: toast appears for High alerts; Block/Trust/Details buttons; dashboard usability. After 2026-10-10, review the noise level of baseline alerts (direct-ip, new listeners, new apps) on real usage.
 2. Hardening:
    - `%ProgramData%\NetworkWatch` inherits "Users: create files". The service should set a restrictive ACL on its data dir (custom list editing then moves to an API command).
    - The service binary is framework-dependent; consider self-contained publishing for distribution.

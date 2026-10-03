@@ -75,6 +75,20 @@ public class WindowsSystemTests
         Assert.Equal(Process.GetCurrentProcess().MainModule!.FileName, identity.Path, ignoreCase: true);
     }
 
+    [Theory]
+    [InlineData("\"C:\\Windows\\System32\\curl.exe\" -s https://x", "curl.exe", true)]
+    [InlineData("C:/Windows/System32/curl.exe -s https://x", "curl.exe", true)]
+    [InlineData("C:\\Windows\\System32\\curl -s", "curl.exe", true)]
+    [InlineData("curl.exe -s https://x", "curl.exe", false)]              // relative: unknown
+    [InlineData("\"C:\\Windows\\System32\\cmd.exe\" /c x", "curl.exe", false)] // different image
+    [InlineData(null, "curl.exe", false)]
+    public void PathFromCommandLineOnlyAcceptsMatchingAbsolutePaths(string? commandLine, string image, bool found)
+    {
+        var path = ProcessResolver.PathFromCommandLine(commandLine, image);
+        Assert.Equal(found, path is not null);
+        if (found) Assert.Equal(Path.Combine(Environment.SystemDirectory, image), path, ignoreCase: true);
+    }
+
     [Fact]
     public void EnvironmentObservationIncludesHostsFileAndDns()
     {
