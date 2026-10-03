@@ -2,81 +2,122 @@
 
 Local network-monitoring tool: a Windows service watches every connection (per process, with DNS names), runs detections, and a tray app shows alerts. **Read [PLAN.md](PLAN.md) first.** It holds the product reasoning, the detection list, the architecture, and the decisions made so far.
 
-## Current status
+## Current status (2026-10-03)
 
-- **Phase 0 spike: working and validated on live traffic** (2026-10-03).
-  - `src/NetworkWatch.Spike` prints live `process → domain → IP:port` and a data-quality summary.
-  - `NetworkWatch.Core` has `DnsCorrelator`, `FlowTracker`, `IpClassifier`, `ReorderBuffer`, and `ICollector`. These are portable and unit-tested.
-  - `NetworkWatch.Collectors.Windows` has `EtwNetworkCollector`: a kernel TCP/IP + process session plus a `Microsoft-Windows-DNS-Client` session, using TraceEvent 3.2.8.
-  - `dotnet test` reports 39 passing tests.
-- Service, tray, detections, and storage aren't started yet.
-- **Owner context:** personal use on the owner's own Windows 11 machine for now. Other OSes and headless servers come later, so keep the core portable (rules below).
+**Phase 1 MVP is functional and installed on the owner's machine.** The service is running and has been verified on live traffic.
+
+| Area | State |
+|---|---|
+| Windows service (`NetworkWatch`, LocalSystem, auto-start, restart-on-failure) | Running |
+| Collectors: ETW connections + DNS (with command line and parent process), TCP listeners, network config | Verified live |
+| Threat intel: ThreatFox IP/domain, URLhaus, Feodo, Spamhaus DROP v4/v6, Tor exits, custom list (~8.9k indicators) | Verified live |
+| Detections #1 threat intel (DNS lookup and connection merge into one alert) | Verified live |
+| #2 untrusted program (unsigned + Temp/Downloads/AppData…) | Verified live |
+| #3 living-off-the-land binaries (+ High if parent is Office/browser/PDF) | Verified live (powershell); certutil is blocked by policy on this PC |
+| #4 direct-to-IP | Unit tests; live check pending |
+| #5 beaconing | Verified live (fires on the 9th regular connection, 5-min span) |
+| #6 exposure (new listener) | Verified live |
+| #6 exposure (inbound from internet), #7 remote-access tools, #8 network tampering | Unit tests only |
+| #9 new app (Info) | Verified live |
+| Firewall block/unblock (rules grouped "NetworkWatch") | Verified live |
+| Trusted-client gate for mutating API commands | Verified live |
+| Local API (named pipe) + `nwctl` CLI | Working |
+| Tray app (icon states, toasts with Block/Trust/Details, dashboard) | Built; first deploy in progress |
+
+Tests: `dotnet test NetworkWatch.slnx` → 65 passing.
+
+**Owner context:** personal use on the owner's own Windows 11 machine. Other OSes and headless servers come later, so keep the core portable (rules below). The owner runs the Windscribe VPN (WireGuard) and qBittorrent, which shape what "normal" looks like.
+
+## Layout
+
+```
+src/NetworkWatch.Core                portable engine (net10.0): events, pipeline, detectors, intel, SQLite storage, API handler + client
+src/NetworkWatch.Collectors.Windows  ETW, listener table, environment, Authenticode/catalog verifier, firewall enforcer, process resolver
+src/NetworkWatch.Service             Windows service host: Engine (composition), workers, pipe server, file logger
+src/NetworkWatch.Cli                 nwctl: CLI client (also the future headless/server UI)
+src/NetworkWatch.Tray                WinForms tray + toasts + dashboard (net10.0-windows10.0.19041.0)
+src/NetworkWatch.Spike               Phase 0 console (kept for ad-hoc ETW debugging)
+tools/NetworkWatch.TrafficGen        nwtraffic: benign test traffic (get / beacon / rawip / listen). Unsigned on purpose.
+tests/…                              Core tests (pipeline scenarios on real SQLite) + Windows real-OS tests (no admin needed)
+scripts/dev                          elevated dev harness (see below)
+```
 
 ## Architecture rules (don't break these)
 
 1. **`NetworkWatch.Core` targets plain `net10.0`** and must not reference Windows APIs, ETW, the registry, WinForms, or `System.Management`. Models, flow aggregation, DNS↔IP correlation, detections, and SQLite storage live here.
-2. **OS-specific code lives only in `NetworkWatch.Collectors.<OS>`** (and the future `IEnforcer` implementations for blocking). Collectors produce normalized events through `ICollector`.
-3. **The service is the product, and the tray is just one client.** The service must run headless (that's the server deployment story). UI talks to it over a local API (named pipe for now). Alerts go out through pluggable `IAlertSink`s.
-4. **Avoid alert fatigue.** Only High severity produces a toast. New detections need a severity tier and a plain-English explanation ("what happened / why it matters / what to do").
+2. **OS-specific code lives only in `NetworkWatch.Collectors.<OS>`**, including `IEnforcer` and `ISignatureVerifier` implementations. Collectors produce normalized events through `ICollector`.
+3. **The service is the product, and the tray and `nwctl` are just clients.** The service must run headless. Clients talk to it over the local API (`\\.\pipe\NetworkWatch`, newline-delimited JSON, see `Core/Api`). Alerts go out through `IAlertSink`s.
+4. **Avoid alert fatigue.**
+   - Only High severity produces a toast; Medium turns the tray yellow; Info is timeline-only.
+   - New detections need a severity tier and a plain-English explanation (what happened / why it matters / what to do).
+   - Alerts dedup on `DedupKey` for 24 h, incrementing the count instead.
+   - Baseline-dependent detectors stay quiet during the 7-day learning period.
 5. **Everything stays local.** No telemetry. Any outbound lookup (VirusTotal, AbuseIPDB) is opt-in.
+6. **Mutating API commands** (trust, untrust, block, unblock, end/restart learning) are only accepted from executables under `%ProgramFiles%\NetworkWatch` (admin-writable only). Malware running as the user must not be able to trust or unblock itself.
 
-## Tech
+## Runtime locations
 
-- C# / **.NET 10 (LTS)**. ETW via `Microsoft.Diagnostics.Tracing.TraceEvent`. Storage via `Microsoft.Data.Sqlite`. The service host uses `Microsoft.Extensions.Hosting.WindowsServices`.
-- ETW kernel network/process sessions **require admin**. The service runs as LocalSystem. Elevated dev runs go through the dev task (below).
-
-## Setting up on a new machine
-
-```powershell
-winget install --id Microsoft.DotNet.SDK.10 --exact
-git clone https://github.com/gthimmes/network-watch.git
-cd network-watch
-dotnet build NetworkWatch.slnx
-.\scripts\dev\register-dev-tasks.ps1   # one-time UAC prompt; enables prompt-free elevated runs
-```
+- Program files: `%ProgramFiles%\NetworkWatch\{service,cli,tray}`
+- Data: `%ProgramData%\NetworkWatch\`
+  - `networkwatch.db` (SQLite, WAL)
+  - `logs\service-yyyyMMdd.log`
+  - `feeds\` (cached feeds)
+  - `custom-indicators.txt` (one IP, CIDR or domain per line; run `nwctl refresh-feeds` after editing)
+- Logs and the DB are readable without admin. Use `nwctl` from Program Files for anything that changes state.
 
 ## Elevated dev runs without UAC (for Claude and humans)
 
-`scripts/dev/register-dev-tasks.ps1` (run once, with one UAC prompt) registers the scheduled task `\NetworkWatch\NetworkWatch-Dev-Spike`. The task runs as the owner with highest privileges and only while they're logged on. After that, **no prompt is needed**:
+`scripts/dev/register-dev-tasks.ps1` (run once, one UAC prompt) registers two scheduled tasks under `\NetworkWatch\`. Both run as the owner with highest privileges, only while the owner is logged on. Both are registered on the owner's main machine.
+
+- **`NetworkWatch-Dev-Service`:** `.\scripts\dev\service.ps1 [-Op install|restart|stop|uninstall] [-NoTray]`
+  - `install` publishes service, cli and tray to `artifacts\install\`.
+  - It then mirrors that folder to `%ProgramFiles%\NetworkWatch`, creates or starts the service, and relaunches the tray.
+- **`NetworkWatch-Dev-Spike`:** `.\scripts\dev\spike.ps1 -Duration 60 -Dns` runs the Phase 0 ETW console elevated.
+
+**Security tradeoff (accepted by the owner):** anything running as the owner can rebuild what these tasks run elevated. Remove them with `scripts\dev\unregister-dev-tasks.ps1`. The tasks store absolute repo paths, so re-register if the repo moves. Each machine needs its own registration.
+
+## Live testing recipe
 
 ```powershell
-.\scripts\dev\spike.ps1 -Duration 60 -Dns        # builds, runs spike elevated, prints .dev\spike.log
+$nw = "$env:ProgramFiles\NetworkWatch\cli\nwctl.exe"
+dotnet publish tools\NetworkWatch.TrafficGen -c Release -o $env:TEMP\nwtest
+& $env:TEMP\nwtest\nwtraffic.exe get https://example.com     # → High "untrusted program" (unsigned, in Temp)
+& $nw end-learning                                           # enables baseline detectors (#4, #6, #9)
+& $env:TEMP\nwtest\nwtraffic.exe listen 47123 45             # → Medium "started accepting connections"
+& $env:TEMP\nwtest\nwtraffic.exe beacon https://example.com/ 40 10   # → beacon alert after ~5 min
+& $env:TEMP\nwtest\nwtraffic.exe rawip 1.1.1.1 443           # → direct-ip (only >10 min after service start)
+& $nw alerts; & $nw alert <id>
+& $nw restart-learning                                       # IMPORTANT: restore the owner's 7-day learning afterwards
 ```
 
-- `spike.ps1` builds as the normal user, writes a validated request to `.dev\spike-request.json`, starts the task, and waits for `.dev\spike.status`.
-- `run-spike.ps1` is what the task executes. It only runs the already-built spike exe, with duration clamped to 5–600 s.
-- To generate traffic during a run, start `spike.ps1` in the background and make requests (e.g. `curl.exe`) meanwhile.
-- **Security tradeoff (accepted by the owner):** anything running as the owner can rebuild the exe the task runs elevated. Remove the task with `scripts\dev\unregister-dev-tasks.ps1`.
-- The task stores an absolute repo path. Re-run the register script if the repo moves. Each machine needs its own registration.
-- Plan: add a similar `NetworkWatch-Dev-Service` task (install/restart the service from the latest build) when Phase 1 starts.
+## Findings so far
 
-Spike flags (when run directly from an elevated terminal): `--all` includes LAN/loopback traffic, `--dns` prints each lookup with its delivery latency, `--log <file>` mirrors output, and `--duration <s>` auto-stops.
-
-## Spike findings (2026-10-03)
-
-- **DNS events arrive late.** DNS-Client events are delivered up to ~3 s after the event, versus ~0–2 s for kernel connection events. That's because they come from separate ETW sessions with independent buffering. Connections therefore pass through a 5 s `ReorderBuffer` before DNS correlation. Without it, the correlation rate was 0%. Keep this in the service pipeline.
-- **Correlation works.** Every `curl` request to github/example/wikipedia/reddit/nuget mapped to its domain, including short-lived processes (the process name was resolved correctly).
-- **Legitimate traffic with no DNS lookup is common.** On the owner's machine this comes from qBittorrent (P2P DHT/trackers by IP) and the WireGuard/Windscribe VPN endpoint. Detection #4 ("direct-to-IP") needs per-app baselining or allowances for P2P/VPN apps, or it will be noisy.
-- The owner runs the **Windscribe VPN**, which sinkholes some domains to `0.0.0.0` (e.g. `mobile.events.data.microsoft.com`). DNS answers of `0.0.0.0` are a usable signal ("blocked by DNS filter").
-- **Not yet validated:**
-  - inbound TCP accepts (none observed, so `saddr`/`daddr` orientation for accepts is unconfirmed)
-  - browser traffic and DNS-over-HTTPS (no browser was active)
-  - IPv6 connections
-  - UDP event volume over long runs
+- **DNS events arrive late.** DNS-Client events arrive up to ~3 s after the connection. The pipeline holds connections for 5 s (`ReorderBuffer`).
+- **Exited processes must stay cached.** Short-lived processes exit before their DNS event is processed, so `ProcessResolver` keeps exited processes for 60 s.
+- **Many Windows binaries are catalog-signed.** In-box binaries (cmd, ping…) have no embedded signature. `WindowsSignatureVerifier` falls back to the catalog database. `curl.exe` and `dotnet.exe` are embedded-signed. The signer shown is the certificate's O= field.
+- **Legitimate direct-to-IP traffic exists on the owner's PC.** qBittorrent (P2P) and the Windscribe VPN endpoint connect straight to IPs. The direct-IP detector learns these during the learning period.
+- **The VPN sinkholes some domains.** Windscribe answers `0.0.0.0` for some domains. A malicious-domain lookup answered with 0.0.0.0 is downgraded to Medium ("your DNS filter blocked it").
+- **`certutil.exe` is blocked from running** on this PC (Defender ASR / policy).
 
 ## Gotchas
 
-- Windows PowerShell 5.1 `Get-Content`/`Set-Content` default to the ANSI codepage. They will mangle the UTF-8 in these docs (em dashes, arrows, box-drawing). Use `-Encoding utf8` or edit files with a proper editor. Keep `.ps1` files ASCII-only.
-- `dotnet test` only builds test projects and their dependencies, not the Spike. Use `dotnet build NetworkWatch.slnx` to catch Spike compile errors.
+- Windows PowerShell 5.1 `Get-Content`/`Set-Content` default to the ANSI codepage and mangle UTF-8. Use `-Encoding utf8` or the Edit tool. Keep `.ps1` files ASCII-only.
+- `dotnet test` only builds test projects and their deps. Use `dotnet build NetworkWatch.slnx` to catch errors elsewhere.
+- Shells opened before the SDK install don't have `dotnet` on PATH. The dev scripts add `%ProgramFiles%\dotnet` themselves.
+- Redeploying restarts the service and loses in-memory detector state (beacon history, DNS map, warm-up timer).
 
-## Next steps
+## Known gaps / next steps
 
-1. Finish the open validation items above. Use a browser with secure DNS on and off, and add a local listener to check inbound accepts.
-2. Start Phase 1 (PLAN.md §7):
-   - `NetworkWatch.Service` (Worker Service + `UseWindowsService`) with the Core pipeline (reorder buffer → DNS correlation → flow tracking)
-   - an install script plus a `NetworkWatch-Dev-Service` dev task
-   - SQLite storage
-   - threat-intel feeds
-   - detections #1–8
-   - the named-pipe API
-   - the tray client
+1. Live-verify direct-IP and beaconing. Exercise the tray toasts and buttons.
+2. Hardening:
+   - `%ProgramData%\NetworkWatch` inherits "Users: create files". The service should set a restrictive ACL on its data dir (custom list editing then moves to an API command).
+   - The service binary is framework-dependent; consider self-contained publishing for distribution.
+3. Phase 2 (PLAN.md §7):
+   - upload-volume anomaly
+   - DNS-abuse heuristics (DGA/tunneling)
+   - suspicious ports
+   - daily digest
+   - GeoIP/ASN enrichment (DB-IP lite, CC BY)
+   - VirusTotal/AbuseIPDB opt-in
+   - a real installer (MSI/MSIX) for non-dev installs
+4. Server story: `nwctl` already works headless. A Linux collector (eBPF or `/proc` + `ss`) would implement `ICollector`, plus a Unix-socket transport for the API.

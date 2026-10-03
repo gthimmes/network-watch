@@ -13,17 +13,17 @@ namespace NetworkWatch.Collectors.Windows;
 /// Microsoft-Windows-DNS-Client provider for per-process DNS lookups.
 /// Requires administrator rights.
 /// </summary>
-public sealed class EtwNetworkCollector : ICollector
+public sealed class EtwNetworkCollector(
+    ProcessResolver? processes = null,
+    string kernelSessionName = "NetworkWatch-Kernel",
+    string dnsSessionName = "NetworkWatch-Dns") : ICollector
 {
-    public const string KernelSessionName = "NetworkWatch-Kernel";
-    public const string DnsSessionName = "NetworkWatch-Dns";
-
     private static readonly Guid DnsClientProvider = new("1C95126E-7EEA-49A9-A3FE-A378B03DDB4D");
     private const int DnsQueryCompletedEventId = 3008;
 
-    private readonly ProcessResolver _processes;
-
-    public EtwNetworkCollector(ProcessResolver? processes = null) => _processes = processes ?? new ProcessResolver();
+    // Session names must differ between the service and the spike: creating a session with an
+    // existing name takes it over.
+    private readonly ProcessResolver _processes = processes ?? new ProcessResolver();
 
     public string Name => "Windows ETW";
 
@@ -35,8 +35,8 @@ public sealed class EtwNetworkCollector : ICollector
             throw new UnauthorizedAccessException("ETW kernel tracing requires administrator rights.");
 
         // Creating a session with an existing name replaces it, which cleans up after a crash.
-        using var kernel = new TraceEventSession(KernelSessionName) { StopOnDispose = true };
-        using var dns = new TraceEventSession(DnsSessionName) { StopOnDispose = true };
+        using var kernel = new TraceEventSession(kernelSessionName) { StopOnDispose = true };
+        using var dns = new TraceEventSession(dnsSessionName) { StopOnDispose = true };
 
         kernel.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP | KernelTraceEventParser.Keywords.Process);
         dns.EnableProvider(DnsClientProvider);
@@ -53,8 +53,8 @@ public sealed class EtwNetworkCollector : ICollector
 
     private void HookKernel(KernelTraceEventParser k, ChannelWriter<NetEvent> sink)
     {
-        k.ProcessStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName, d.CommandLine);
-        k.ProcessDCStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName, d.CommandLine);
+        k.ProcessStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName, d.CommandLine, d.ParentID);
+        k.ProcessDCStart += d => _processes.OnStart(d.ProcessID, d.ImageFileName, d.CommandLine, d.ParentID);
         k.ProcessStop += d => _processes.OnStop(d.ProcessID);
 
         k.TcpIpConnect += d => Emit(sink, d, Protocol.Tcp, Direction.Outbound, d.saddr, d.sport, d.daddr, d.dport, d.size);
@@ -75,7 +75,7 @@ public sealed class EtwNetworkCollector : ICollector
         var process = _processes.Resolve(d.ProcessID, d.ProcessName);
         sink.TryWrite(new ConnectionEvent(
             new DateTimeOffset(d.TimeStamp), d.ProcessID, process.Name, process.Path,
-            protocol, direction, new IPEndPoint(saddr, sport), new IPEndPoint(daddr, dport), size, process.CommandLine));
+            protocol, direction, new IPEndPoint(saddr, sport), new IPEndPoint(daddr, dport), size, process.CommandLine, process.ParentName));
     }
 
     private void HookDns(RegisteredTraceEventParser parser, ChannelWriter<NetEvent> sink)

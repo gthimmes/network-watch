@@ -1,31 +1,51 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace NetworkWatch.Collectors.Windows;
 
-public sealed record ProcessIdentity(string Name, string? Path, string? CommandLine);
+public sealed record ProcessIdentity(string Name, string? Path, string? CommandLine, string? ParentName = null);
 
 /// <summary>
-/// Caches PID → process name/path/command line. Entries are seeded from ETW process start/rundown
-/// events and invalidated on process stop so PID reuse doesn't misattribute traffic.
-/// Shared by all Windows collectors. Thread-safe.
+/// Caches PID → process identity. Entries are seeded from ETW process start/rundown events.
+/// Exited processes stay cached for a minute because DNS events arrive seconds late (separate
+/// ETW session) and short-lived programs are often gone by then. A new start for the same PID
+/// replaces the entry, so PID reuse doesn't misattribute traffic. Thread-safe.
 /// </summary>
 public sealed partial class ProcessResolver
 {
-    private readonly ConcurrentDictionary<int, ProcessIdentity> _cache = new();
+    private static readonly TimeSpan ExitedRetention = TimeSpan.FromMinutes(1);
 
-    public void OnStart(int pid, string imageFileName, string? commandLine)
+    private readonly ConcurrentDictionary<int, ProcessIdentity> _cache = new();
+    private readonly ConcurrentDictionary<int, DateTime> _exited = new();
+    private DateTime _lastSweep = DateTime.UtcNow;
+
+    public void OnStart(int pid, string imageFileName, string? commandLine, int parentPid = -1)
     {
         var path = QueryImagePath(pid);
+        var parent = parentPid > 0 ? Resolve(parentPid).Name : null;
+        _exited.TryRemove(pid, out _);
         _cache[pid] = new ProcessIdentity(path is not null ? System.IO.Path.GetFileName(path) : imageFileName, path,
-            string.IsNullOrWhiteSpace(commandLine) ? null : commandLine);
+            string.IsNullOrWhiteSpace(commandLine) ? null : commandLine, parent);
     }
 
-    public void OnStop(int pid) => _cache.TryRemove(pid, out _);
+    public void OnStop(int pid)
+    {
+        _exited[pid] = DateTime.UtcNow;
+        Sweep();
+    }
 
     public ProcessIdentity Resolve(int pid, string? etwName = null) =>
         _cache.GetOrAdd(pid, static (p, name) => Query(p, name), etwName);
+
+    private void Sweep()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastSweep < TimeSpan.FromSeconds(10)) return;
+        _lastSweep = now;
+        foreach (var (pid, exitedAt) in _exited)
+            if (now - exitedAt > ExitedRetention && _exited.TryRemove(pid, out _))
+                _cache.TryRemove(pid, out _);
+    }
 
     private static ProcessIdentity Query(int pid, string? etwName)
     {

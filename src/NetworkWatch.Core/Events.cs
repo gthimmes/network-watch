@@ -20,7 +20,8 @@ public sealed record ConnectionEvent(
     IPEndPoint Local,
     IPEndPoint Remote,
     int Bytes,
-    string? CommandLine = null) : NetEvent(Time, Pid);
+    string? CommandLine = null,
+    string? ParentProcessName = null) : NetEvent(Time, Pid);
 
 /// <summary>A completed DNS lookup made by a process, with the addresses it resolved to.</summary>
 public sealed record DnsResolution(

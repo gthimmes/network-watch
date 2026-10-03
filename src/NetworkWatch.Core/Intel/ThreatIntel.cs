@@ -15,7 +15,8 @@ public enum ThreatCategory
     Custom,
 }
 
-public sealed record ThreatIndicator(string Source, ThreatCategory Category, string Description, bool Compromised = false);
+/// <param name="Value">The listed IP, CIDR or domain that matched (set when added to the builder).</param>
+public sealed record ThreatIndicator(string Source, ThreatCategory Category, string Description, bool Compromised = false, string? Value = null);
 
 /// <summary>Immutable snapshot of all loaded indicators. Swapped atomically on refresh.</summary>
 public sealed class ThreatIntel
@@ -115,7 +116,7 @@ public sealed class ThreatIntelBuilder
         var table = isV4 ? _v4 : _v6;
         if (!table.TryGetValue(prefix, out var byNetwork))
             table[prefix] = byNetwork = [];
-        byNetwork.TryAdd(ThreatIntel.Mask(ThreatIntel.ToUInt128(address), prefix, bits), indicator);
+        byNetwork.TryAdd(ThreatIntel.Mask(ThreatIntel.ToUInt128(address), prefix, bits), indicator with { Value = text.Trim() });
         Count(indicator);
         return true;
     }
@@ -125,7 +126,7 @@ public sealed class ThreatIntelBuilder
         domain = domain.Trim().TrimEnd('.');
         if (domain.Length == 0 || domain.Contains(' ') || !domain.Contains('.')) return false;
         if (IPAddress.TryParse(domain, out _)) return AddNetwork(domain, indicator);
-        _domains.TryAdd(domain, indicator);
+        _domains.TryAdd(domain, indicator with { Value = domain.ToLowerInvariant() });
         Count(indicator);
         return true;
     }

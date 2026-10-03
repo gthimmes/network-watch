@@ -49,10 +49,11 @@ public sealed class PipelineTests : IDisposable
     private void AfterLearning() => _now = T0.AddDays(8);
 
     private void Connect(string name, string? path, string ip, int port = 443, Direction dir = Direction.Outbound,
-        Protocol proto = Protocol.Tcp, int localPort = 50000, int pid = 1234)
+        Protocol proto = Protocol.Tcp, int localPort = 50000, int pid = 1234, string? parent = null)
     {
         _pipeline.Process(new ConnectionEvent(_now, pid, name, path, proto, dir,
-            new IPEndPoint(IPAddress.Parse("192.168.1.10"), localPort), new IPEndPoint(IPAddress.Parse(ip), port), 0), _now);
+            new IPEndPoint(IPAddress.Parse("192.168.1.10"), localPort), new IPEndPoint(IPAddress.Parse(ip), port), 0,
+            ParentProcessName: parent), _now);
         _now = _now.AddSeconds(6);
         _pipeline.Flush(_now);
     }
@@ -142,6 +143,31 @@ public sealed class PipelineTests : IDisposable
         Dns("api.example", "198.51.100.21");
         Connect("powershell.exe", @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "198.51.100.21");
         Assert.Equal(Severity.Medium, _sink.Alerts[^1].Severity);
+    }
+
+    [Fact]
+    public void PowerShellStartedByOfficeIsHigh()
+    {
+        Dns("stage2.example", "198.51.100.30");
+        Connect("powershell.exe", @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "198.51.100.30", parent: "WINWORD.EXE");
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal(Severity.High, alert.Severity);
+        Assert.Contains("started by WINWORD.EXE", alert.WhatHappened);
+    }
+
+    [Fact]
+    public void BadDomainLookupAndConnectionMergeIntoOneAlert()
+    {
+        var b = new ThreatIntelBuilder();
+        b.AddDomain("evil.example", new ThreatIndicator("custom", ThreatCategory.Custom, "Your custom blocklist"));
+        _intel = b.Build();
+
+        Dns("www.evil.example", "198.51.100.40", process: "curl.exe");
+        Connect("curl.exe", null, "198.51.100.40");
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal(2, _alertStore.Get(alert.Id)!.Count);
     }
 
     [Fact]

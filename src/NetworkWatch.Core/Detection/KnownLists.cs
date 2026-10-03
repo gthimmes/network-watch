@@ -36,6 +36,18 @@ public static class KnownLists
         ["msiexec.exe"] = false,
     };
 
+    /// <summary>
+    /// Programs that should essentially never launch a script host or download tool. A LOLBin started
+    /// by one of these (Office, PDF readers, browsers, mail) is a classic malicious-document/exploit chain.
+    /// </summary>
+    public static readonly IReadOnlySet<string> SuspiciousParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "onenote.exe", "msaccess.exe", "mspub.exe", "visio.exe",
+        "acrord32.exe", "acrobat.exe", "foxitpdfreader.exe", "sumatrapdf.exe",
+        "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "iexplore.exe",
+        "thunderbird.exe", "olk.exe", "hwp.exe", "wordpad.exe",
+    };
+
     /// <summary>Remote-control / remote-support tools. The #1 tool in tech-support scams.</summary>
     public static readonly IReadOnlySet<string> RemoteAccessTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {

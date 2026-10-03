@@ -7,7 +7,7 @@
   performs that operation on the NetworkWatch Windows service, and writes
   .dev\service.status and .dev\service-op.log.
 
-  install  : stop if running, mirror artifacts\service -> %ProgramFiles%\NetworkWatch\service,
+  install  : stop if running, mirror artifacts\install -> %ProgramFiles%\NetworkWatch (service\, cli\, tray\),
              create the service if missing (auto start, restart on failure), start it.
   restart  : restart the installed service.
   stop     : stop the service.
@@ -21,9 +21,9 @@ $log = Join-Path $dev 'service-op.log'
 New-Item -ItemType Directory -Force -Path $dev | Out-Null
 
 $serviceName = 'NetworkWatch'
-$source = Join-Path $repo 'artifacts\service'
-$dest = Join-Path $env:ProgramFiles 'NetworkWatch\service'
-$exe = Join-Path $dest 'NetworkWatch.Service.exe'
+$source = Join-Path $repo 'artifacts\install'
+$dest = Join-Path $env:ProgramFiles 'NetworkWatch'
+$exe = Join-Path $dest 'service\NetworkWatch.Service.exe'
 
 function Log([string]$msg) { Add-Content -Path $log -Value "$(Get-Date -Format HH:mm:ss) $msg" -Encoding ascii }
 
@@ -48,7 +48,7 @@ try {
 
     switch ($op) {
         'install' {
-            if (-not (Test-Path (Join-Path $source 'NetworkWatch.Service.exe'))) { throw "Not published: $source (run service.ps1, which publishes first)" }
+            if (-not (Test-Path (Join-Path $source 'service\NetworkWatch.Service.exe'))) { throw "Not published: $source (run service.ps1, which publishes first)" }
             Stop-NwService
             New-Item -ItemType Directory -Force -Path $dest | Out-Null
             robocopy $source $dest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null

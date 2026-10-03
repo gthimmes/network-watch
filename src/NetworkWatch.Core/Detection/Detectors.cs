@@ -32,6 +32,11 @@ public sealed class ThreatIntelDetector : Detector
             yield break;
         }
 
+        // When the match came from the domain (not the IP), the DNS lookup already raised an alert
+        // for the same program+domain; share its key so the connection merges into it.
+        if (c.Domain is not null && ctx.Intel.Lookup(c.Conn.Remote.Address) is null)
+            key = DnsKey(c.Conn.ProcessName, t.Value ?? c.Domain);
+
         var severity = t.Compromised ? Severity.Medium : Severity.High;
         var direction = inbound ? "received a connection from" : "connected to";
         yield return ForConnection(c, ctx, severity, key,
@@ -59,7 +64,7 @@ public sealed class ThreatIntelDetector : Detector
         {
             DetectorId = Id,
             Severity = t.Compromised || blocked ? Severity.Medium : Severity.High,
-            DedupKey = $"ti-dns:{name}:{d.QueryName}",
+            DedupKey = DnsKey(name, t.Value ?? d.QueryName),
             Title = $"{name} looked up a known malicious domain",
             WhatHappened = $"{name} (PID {d.Pid}) asked DNS for {d.QueryName}, which is listed by {t.Description}." +
                 (blocked ? " Your DNS filter answered with a blocked address, so the connection probably did not happen." : ""),
@@ -73,6 +78,9 @@ public sealed class ThreatIntelDetector : Detector
             LastSeen = ctx.Now,
         };
     }
+
+    private static string DnsKey(string processName, string domain) =>
+        $"ti-dns:{processName.ToLowerInvariant()}:{domain.TrimEnd('.').ToLowerInvariant()}";
 }
 
 /// <summary>#2: unsigned / invalidly signed program, especially from Temp/Downloads/AppData, using the internet.</summary>
@@ -125,14 +133,17 @@ public sealed class LivingOffTheLandDetector : Detector
         if (!KnownLists.LivingOffTheLand.TryGetValue(file, out var highSuspicion)) yield break;
         if (KnownLists.IsRoutineDomain(c.Domain)) yield break;
 
-        var severity = highSuspicion ? Severity.High : Severity.Medium;
+        var suspiciousParent = c.Conn.ParentProcessName is { } parent && KnownLists.SuspiciousParents.Contains(parent);
+        var severity = highSuspicion || suspiciousParent ? Severity.High : Severity.Medium;
         var commandLine = c.Conn.CommandLine is { Length: > 0 } cmd ? $" Command line: {Truncate(cmd, 400)}" : "";
         yield return ForConnection(c, ctx, severity, $"lolbin:{file}:{c.Destination}",
             $"{c.Conn.ProcessName} reached out to {c.Destination}",
             $"{Describe(c)} connected to {c.DestinationWithPort}{(c.Domain is null ? " (no DNS name)" : "")}.{commandLine}",
             $"{file} is a built-in Windows tool that attackers abuse to download and run malicious code without dropping obvious malware files (\"living off the land\"). " +
-                (highSuspicion ? "It rarely needs to contact internet servers in normal use." : "It's also used legitimately by scripts and admins, so check whether you or an installer were running something."),
-            "If you weren't running a script or installer just now, find what started this process (Task Manager → Details → right-click → Analyze wait chain / check parent), block it, and run a Defender scan.");
+                (suspiciousParent ? $"It was started by {c.Conn.ParentProcessName}, which is exactly how malicious documents, emails and web exploits launch their payloads. "
+                 : highSuspicion ? "It rarely needs to contact internet servers in normal use. "
+                 : "It's also used legitimately by scripts and admins, so check whether you or an installer were running something. "),
+            "If you weren't running a script or installer just now, block it and run a Microsoft Defender full scan. If a document or email was open, close it and don't enable macros or editing.");
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";

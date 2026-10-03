@@ -88,7 +88,8 @@ public abstract class Detector
     };
 
     protected static string Describe(EnrichedConnection c) =>
-        $"{c.Conn.ProcessName} (PID {c.Conn.Pid}{(c.Conn.ProcessPath is null ? "" : $", {c.Conn.ProcessPath}")})";
+        $"{c.Conn.ProcessName} (PID {c.Conn.Pid}{(c.Conn.ProcessPath is null ? "" : $", {c.Conn.ProcessPath}")}" +
+        $"{(c.Conn.ParentProcessName is null ? "" : $", started by {c.Conn.ParentProcessName}")})";
 
     protected static string SignerText(SignatureInfo s) => s.Status switch
     {

@@ -14,6 +14,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Fresh SDK installs may not be on PATH in already-open shells.
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { $env:Path = "$env:ProgramFiles\dotnet;$env:Path" }
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $dev = Join-Path $repo '.dev'
 $status = Join-Path $dev 'spike.status'
