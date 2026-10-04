@@ -76,6 +76,13 @@ public sealed class AlertStore(Database database)
         Database.Execute(db, "UPDATE alerts SET last_seen = $t, count = count + 1 WHERE id = $id", ("$t", Database.ToUnixMs(lastSeen)), ("$id", id));
     }
 
+    /// <summary>Appends a sentence to an alert's "what happened" text (e.g. a VirusTotal result).</summary>
+    public void AppendNote(long id, string note)
+    {
+        using var db = database.Open();
+        Database.Execute(db, "UPDATE alerts SET what = what || ' ' || $n WHERE id = $id", ("$n", note), ("$id", id));
+    }
+
     public void SetStatus(long id, AlertStatus status)
     {
         using var db = database.Open();

@@ -29,10 +29,15 @@ public sealed class Engine
         Enforcer = new WindowsFirewallEnforcer();
         Pipeline = new NetworkPipeline(Baseline, Alerts, Connections, () => Feeds.Current, new WindowsSignatureVerifier(),
             DefaultDetectors.Create(), loggers.CreateLogger<NetworkPipeline>(), StartedAt, Usage, Geo.Lookup);
-        Api = new ApiHandler(AlertStore, Connections, Usage, Baseline, Feeds, Enforcer, Status);
+        Secrets = new DpapiSecretStore(Database);
+        VirusTotal = new VirusTotalEnricher(http.CreateClient("virustotal"), Secrets, Database, AlertStore, () => Alerts, loggers.CreateLogger<VirusTotalEnricher>());
+        Alerts.AddSink(VirusTotal);
+        Api = new ApiHandler(AlertStore, Connections, Usage, Baseline, Feeds, Enforcer, Status, Secrets);
     }
 
     public UsageStore Usage { get; }
+    public ISecretStore Secrets { get; }
+    public VirusTotalEnricher VirusTotal { get; }
     public GeoIpService Geo { get; }
 
     public static string Version { get; } =
@@ -66,6 +71,8 @@ public sealed class Engine
             ConnectionsSeen = Interlocked.Read(ref stats.ConnectionsSeen),
             FlowsStored = Interlocked.Read(ref stats.FlowsStored),
             DnsResolutions = Interlocked.Read(ref stats.DnsResolutions),
+            RemoteLogons = Interlocked.Read(ref stats.RemoteLogons),
+            VirusTotalEnabled = VirusTotal.IsEnabled,
             LastEvent = stats.LastEvent,
             ThreatIndicators = Feeds.Current.TotalIndicators,
             FeedsRefreshed = Feeds.LastRefresh,

@@ -39,7 +39,8 @@ public sealed class ApiHandler(
     Baseline baseline,
     FeedManager feeds,
     IEnforcer? enforcer,
-    Func<StatusDto> status)
+    Func<StatusDto> status,
+    ISecretStore? secrets = null)
 {
     public async Task<object?> HandleAsync(ApiRequest request, bool trustedClient, CancellationToken ct)
     {
@@ -133,6 +134,10 @@ public sealed class ApiHandler(
                 if (!feeds.RemoveCustomIndicator(request.Value ?? throw new ApiException("removeIndicator needs a value.")))
                     throw new ApiException($"'{request.Value}' isn't on your custom list.");
                 return feeds.CustomIndicators();
+
+            case ApiCommands.SetVirusTotalKey:
+                (secrets ?? throw new ApiException("Secret storage isn't available on this system.")).Set(VirusTotalEnricher.SecretName, request.Value);
+                return status();
 
             case ApiCommands.EndLearning:
                 baseline.EndLearning(DateTimeOffset.Now);

@@ -32,9 +32,15 @@ Local network-monitoring tool: a Windows service watches every connection (per p
 | Data dir ACL hardening (SYSTEM/Admins full, Users read) | Verified live (user write denied) |
 | Custom blocklist via API (`nwctl indicators add/remove`), trusted clients only | Verified live |
 | Per-app traffic (`nwctl usage`, Programs tab), daily digest (`nwctl digest`, tray toast after 9:00) | Verified live (digest toast pending first morning) |
-| Release zip + `install.ps1`/`uninstall.ps1`; dev deploys run the installer's elevated path | Built; elevated install path verified live; the UAC wrapper and uninstall are untested |
+| Release zip + `install.ps1`/`uninstall.ps1`; dev deploys run both scripts' elevated paths | Verified live: full uninstall (service, files, shortcut, firewall rules gone; data kept) and reinstall. The UAC wrappers are untested |
+| **Phase 3** (2026-10-03, late) | |
+| #13 remote sign-ins (Security log 4624/4625, types 3/10): new LAN RDP source, any sign-in from the internet, password guessing | Unit tests. Live: 13 past sign-ins replayed at startup and learned, no alerts |
+| VirusTotal opt-in (`nwctl virustotal <key>\|off`): SHA-256 only; key DPAPI-encrypted (LocalSystem); ≥3 engines → High alert, else note on the alert; cached | Unit tests (fake API). Live: key set/unset; key redacted in logs. No real lookups made (owner hasn't opted in) |
+| Toast delivery | Verified in Windows' notification store: High alert toast (Details/Block/Trust) and daily digest toast |
+| Resource use | Measured: service 0.03% CPU (8 cores), 26 MB private memory; tray 16 MB |
+| App icon (shield .ico) for tray/service/CLI exes | Done |
 
-Tests: `dotnet test NetworkWatch.slnx` → 90 passing.
+Tests: `dotnet test NetworkWatch.slnx` → 99 passing.
 
 After live testing, the custom list was cleared, test alerts acknowledged and **learning restarted: it ends 2026-10-10 15:16**. The acknowledged test alerts from 2026-10-03 15:00–15:17 (nwtraffic/curl/example.edu/iana.org) remain in history. They age out after 90 days and appear in the digest until 2026-10-04 ~15:17.
 
@@ -131,10 +137,10 @@ dotnet publish tools\NetworkWatch.TrafficGen -c Release -o $env:TEMP\nwtest
    - the RDP sessions from 192.168.50.136 are theirs
    - after 2026-10-10, review the noise level of baseline alerts (direct-ip, new listeners, new apps, suspicious ports, upload volume) on real usage
 2. **Not built:**
-   - **VirusTotal/AbuseIPDB opt-in lookups.** Needs the owner's API key. Design: key in an admin-only config file; hash lookup for unsigned programs, appended to "untrusted program" alerts.
+   - **AbuseIPDB lookups.** VirusTotal is done. AbuseIPDB would follow the same enricher pattern for IPs.
    - **MSI/MSIX installer.** The zip + `install.ps1` covers personal use.
-   - **Code signing of our own binaries.** `NetworkWatch.Service.exe` shows as unsigned in its own Programs list.
-   - **Alert on new RDP/remote logon sources.** This PC accepts RDP from the LAN.
+   - **Code signing of our own binaries.** `NetworkWatch.Service.exe` shows as unsigned in its own Programs list. Needs a certificate.
+   - **Hosts/proxy/DNS-tamper, inbound-from-internet and remote-access-tool detections are only unit-tested.** Live tests need admin-level system changes or software that isn't installed.
 3. **Release:**
    - `scripts\build-release.ps1` creates `artifacts\release\NetworkWatch-<version>-win-x64.zip`.
    - On a new machine: unzip, run `install.ps1` (one UAC prompt; offers to winget-install the .NET 10 Desktop Runtime).

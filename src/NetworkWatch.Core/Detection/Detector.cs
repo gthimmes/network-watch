@@ -54,6 +54,7 @@ public abstract class Detector
     public virtual IEnumerable<Alert> OnListeners(ListenerSnapshot s, DetectionContext ctx) => [];
     public virtual IEnumerable<Alert> OnEnvironment(EnvironmentObservation o, DetectionContext ctx) => [];
     public virtual IEnumerable<Alert> OnTraffic(EnrichedTraffic t, DetectionContext ctx) => [];
+    public virtual IEnumerable<Alert> OnRemoteLogon(RemoteLogon e, DetectionContext ctx) => [];
 
     /// <summary>Called about once a minute for housekeeping.</summary>
     public virtual void OnTick(DetectionContext ctx) { }

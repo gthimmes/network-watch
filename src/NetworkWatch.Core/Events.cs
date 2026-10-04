@@ -57,6 +57,27 @@ public sealed record ListenerSnapshot(DateTimeOffset Time, IReadOnlyList<Listene
 /// </summary>
 public sealed record EnvironmentObservation(DateTimeOffset Time, string Kind, string Subject, string Value) : NetEvent(Time, 0);
 
+public enum LogonKind
+{
+    /// <summary>Network logon (file sharing, remote management, the first step of an NLA Remote Desktop logon).</summary>
+    Network = 3,
+    /// <summary>Remote Desktop.</summary>
+    RemoteDesktop = 10,
+}
+
+/// <summary>
+/// A sign-in to this computer from another machine, successful or failed. <see cref="Historical"/> events come
+/// from reading past logs at startup; they seed the baseline and are not treated as new activity.
+/// </summary>
+public sealed record RemoteLogon(
+    DateTimeOffset Time,
+    bool Success,
+    string User,
+    IPAddress Source,
+    LogonKind Kind,
+    string? Workstation,
+    bool Historical) : NetEvent(Time, 0);
+
 public static class EnvironmentKinds
 {
     public const string DnsServers = "dns-servers";

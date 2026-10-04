@@ -57,9 +57,10 @@ try {
         'restart' { Stop-NwService; Start-Service $serviceName; Log 'restarted' }
         'stop' { Stop-NwService; Log 'stopped' }
         'uninstall' {
-            Stop-NwService
-            if (Get-Service $serviceName -ErrorAction SilentlyContinue) { sc.exe delete $serviceName | Out-Null; Log 'deleted service' }
-            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force; Log 'removed program files' }
+            # Same code path as a real uninstall (keeps %ProgramData% data).
+            & (Join-Path $repo 'scripts\uninstall.ps1') -Elevated
+            if ($LASTEXITCODE -ne 0) { throw "uninstall.ps1 failed ($LASTEXITCODE)" }
+            Log 'uninstalled via scripts\uninstall.ps1'
         }
     }
 

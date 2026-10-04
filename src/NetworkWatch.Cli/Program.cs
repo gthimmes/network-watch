@@ -61,6 +61,8 @@ try
         "indicators" => new ApiRequest { Cmd = ApiCommands.Indicators },
         "usage" => new ApiRequest { Cmd = ApiCommands.Usage, Hours = IntOption("--hours") ?? 24, Limit = IntOption("--limit") ?? 20 },
         "digest" => new ApiRequest { Cmd = ApiCommands.Digest, Hours = IntOption("--hours") ?? 24 },
+        "virustotal" when StrArg(1) == "off" => new ApiRequest { Cmd = ApiCommands.SetVirusTotalKey, Value = null },
+        "virustotal" when StrArg(1) is { Length: > 10 } key => new ApiRequest { Cmd = ApiCommands.SetVirusTotalKey, Value = key },
         _ => null,
     };
     if (request is null)
@@ -86,7 +88,7 @@ try
 
     switch (command)
     {
-        case "status" or "end-learning" or "restart-learning" or "refresh-feeds":
+        case "status" or "end-learning" or "restart-learning" or "refresh-feeds" or "virustotal":
             PrintStatus(data.Value.Deserialize<StatusDto>(ApiJson.Options)!);
             break;
         case "alerts":
@@ -154,10 +156,11 @@ static void PrintStatus(StatusDto s)
     Console.WriteLine(s.IsLearning
         ? $"Learning what's normal until {s.LearningEndsAt:g} (baseline alerts are quiet until then)"
         : "Learning period complete: watching for anything unusual");
-    Console.WriteLine($"Events: {s.EventsProcessed:N0}  connections: {s.ConnectionsSeen:N0}  flows stored: {s.FlowsStored:N0}  DNS answers: {s.DnsResolutions:N0}");
+    Console.WriteLine($"Events: {s.EventsProcessed:N0}  connections: {s.ConnectionsSeen:N0}  flows stored: {s.FlowsStored:N0}  DNS answers: {s.DnsResolutions:N0}  remote sign-ins: {s.RemoteLogons:N0}");
     Console.WriteLine($"Last event: {s.LastEvent?.ToString("T") ?? "none yet"}  apps known: {s.AppsKnown}");
     Console.WriteLine($"Threat indicators loaded: {s.ThreatIndicators:N0}  (feeds refreshed {s.FeedsRefreshed?.ToString("g") ?? "never"})");
     Console.WriteLine($"Unacknowledged alerts: {s.UnacknowledgedHigh} high, {s.UnacknowledgedMedium} medium");
+    Console.WriteLine($"VirusTotal lookups: {(s.VirusTotalEnabled ? "on (hashes only)" : "off (nwctl virustotal <api-key> to enable)")}");
     foreach (var e in s.CollectorErrors) Console.WriteLine($"Collector error: {e}");
 }
 
@@ -201,6 +204,7 @@ static void PrintHelp()
           usage [--hours N]                   data sent/received per program
           digest [--hours N]                  summary of the last day
           indicators [add|remove <ip|cidr|domain>]   your custom blocklist
+          virustotal <api-key>|off             opt-in VirusTotal hash lookups for suspicious programs
           end-learning | restart-learning | refresh-feeds
           watch                               stream new alerts
           --json                              raw JSON output

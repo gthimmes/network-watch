@@ -6,6 +6,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>nwctl</AssemblyName>
     <Version>0.1.0</Version>
+    <ApplicationIcon>../NetworkWatch.Tray/networkwatch.ico</ApplicationIcon>
+    <Product>Network Watch</Product>
   </PropertyGroup>
 
   <ItemGroup>

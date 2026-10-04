@@ -11,6 +11,7 @@ public sealed class PipelineStats
     public long ConnectionsSeen;
     public long FlowsStored;
     public long DnsResolutions;
+    public long RemoteLogons;
     public DateTimeOffset? LastEvent;
 }
 
@@ -128,6 +129,11 @@ public sealed class NetworkPipeline
 
             case EnvironmentObservation observation:
                 RunDetectors(now, d => d.OnEnvironment(observation, Context(now)));
+                break;
+
+            case RemoteLogon logon:
+                Stats.RemoteLogons++;
+                RunDetectors(now, d => d.OnRemoteLogon(logon, Context(now)));
                 break;
 
             case TrafficSample sample:

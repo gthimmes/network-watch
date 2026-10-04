@@ -23,6 +23,7 @@ public sealed class MonitorWorker(Engine engine, ILogger<MonitorWorker> logger) 
             new EtwNetworkCollector(engine.Processes, "NetworkWatch-Service-Kernel", "NetworkWatch-Service-Dns"),
             new ListenerCollector(engine.Processes),
             new EnvironmentCollector(),
+            new RemoteLogonCollector(),
         ];
         var running = collectors.Select(c => RunCollector(c, channel.Writer, ct)).ToList();
 
@@ -108,4 +109,10 @@ public sealed class MaintenanceWorker(Engine engine, ILogger<MaintenanceWorker> 
         }
         while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false));
     }
+}
+
+/// <summary>Background VirusTotal hash lookups (only when the user configured an API key).</summary>
+public sealed class VirusTotalWorker(Engine engine) : BackgroundService
+{
+    protected override Task ExecuteAsync(CancellationToken ct) => engine.VirusTotal.RunAsync(ct);
 }

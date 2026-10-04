@@ -14,10 +14,12 @@ builder.Services.AddHttpClient("feeds", client =>
     client.Timeout = TimeSpan.FromSeconds(60);
     client.DefaultRequestHeaders.UserAgent.ParseAdd($"NetworkWatch/{Engine.Version} (+https://github.com/gthimmes/network-watch)");
 });
+builder.Services.AddHttpClient("virustotal", client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton<Engine>();
 builder.Services.AddHostedService<PipeServer>();
 builder.Services.AddHostedService<FeedWorker>();
 builder.Services.AddHostedService<MaintenanceWorker>();
+builder.Services.AddHostedService<VirusTotalWorker>();
 builder.Services.AddHostedService<MonitorWorker>();
 
 builder.Build().Run();

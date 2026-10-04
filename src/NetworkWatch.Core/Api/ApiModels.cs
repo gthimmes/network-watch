@@ -32,11 +32,12 @@ public static class ApiCommands
     public const string RemoveIndicator = "removeIndicator";
     public const string Usage = "usage";
     public const string Digest = "digest";
+    public const string SetVirusTotalKey = "setVirusTotalKey";
 
     /// <summary>Commands that change behavior; only accepted from trusted (installed) clients.</summary>
     public static readonly IReadOnlySet<string> Mutating = new HashSet<string>
     {
-        Trust, Untrust, Block, Unblock, EndLearning, RestartLearning, AddIndicator, RemoveIndicator,
+        Trust, Untrust, Block, Unblock, EndLearning, RestartLearning, AddIndicator, RemoveIndicator, SetVirusTotalKey,
     };
 }
 
@@ -79,6 +80,8 @@ public sealed record StatusDto
     public required long ConnectionsSeen { get; init; }
     public required long FlowsStored { get; init; }
     public required long DnsResolutions { get; init; }
+    public long RemoteLogons { get; init; }
+    public bool VirusTotalEnabled { get; init; }
     public DateTimeOffset? LastEvent { get; init; }
     public required int ThreatIndicators { get; init; }
     public DateTimeOffset? FeedsRefreshed { get; init; }

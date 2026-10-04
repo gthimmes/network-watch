@@ -411,5 +411,6 @@ public static class DefaultDetectors
         new DnsAbuseDetector(),
         new SuspiciousPortDetector(),
         new UploadVolumeDetector(),
+        new RemoteLogonDetector(),
     ];
 }

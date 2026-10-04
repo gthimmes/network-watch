@@ -121,6 +121,27 @@ public class WindowsSystemTests
     }
 
     [Fact]
+    public void SecretsAreEncryptedAtRestAndRoundTrip()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"nw-secret-{Guid.NewGuid():N}.db");
+        try
+        {
+            var db = new NetworkWatch.Core.Storage.Database(path);
+            var store = new DpapiSecretStore(db);
+            store.Set("k", "super-secret-value");
+            Assert.Equal("super-secret-value", store.Get("k"));
+            Assert.DoesNotContain("super-secret", db.GetSetting("secret:k"));
+            store.Set("k", null);
+            Assert.Null(store.Get("k"));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            foreach (var f in new[] { path, path + "-wal", path + "-shm" }) try { File.Delete(f); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void HostsNormalizationDropsCommentsAndWhitespace()
     {
         var normalized = EnvironmentCollector.NormalizeHosts("# header\r\n127.0.0.1\t  localhost   # loop\r\n\r\n  6.6.6.6 bank.example\r\n");

@@ -96,7 +96,11 @@ public sealed partial class PipeServer : BackgroundService, IAlertSink
                     }
                     var data = await _engine.Api.HandleAsync(request, trusted, ct).ConfigureAwait(false);
                     if (ApiCommands.Mutating.Contains(request.Cmd))
-                        _logger.LogInformation("API {Command} by {Client}: {Request}", request.Cmd, clientPath, line);
+                    {
+                        // Logs are readable by local users: never write secrets (API keys) to them.
+                        var logged = request.Cmd == ApiCommands.SetVirusTotalKey && request.Value is not null ? request with { Value = "(redacted)" } : request;
+                        _logger.LogInformation("API {Command} by {Client}: {Request}", request.Cmd, clientPath, Serialize(logged));
+                    }
                     response = new ApiResponse { Id = request.Id, Ok = true, Data = JsonSerializer.SerializeToElement(data, ApiJson.Options) };
                 }
                 catch (Exception ex) when (ex is ApiException or JsonException)
