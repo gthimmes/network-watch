@@ -408,5 +408,8 @@ public static class DefaultDetectors
         new RemoteAccessDetector(),
         new EnvironmentTamperDetector(),
         new NewAppDetector(),
+        new DnsAbuseDetector(),
+        new SuspiciousPortDetector(),
+        new UploadVolumeDetector(),
     ];
 }

@@ -24,7 +24,7 @@ string? StrArg(int index) => positional.Count > index ? positional[index] : null
 
 var command = positional[0];
 // --path/--app/--search/--min/--limit values are not commands' positional args
-foreach (var opt in new[] { "--path", "--app", "--search", "--min", "--limit" })
+foreach (var opt in new[] { "--path", "--app", "--search", "--min", "--limit", "--hours" })
     if (Option(opt) is { } value) positional.Remove(value);
 
 try
@@ -56,6 +56,11 @@ try
         "end-learning" => new ApiRequest { Cmd = ApiCommands.EndLearning },
         "restart-learning" => new ApiRequest { Cmd = ApiCommands.RestartLearning },
         "refresh-feeds" => new ApiRequest { Cmd = ApiCommands.RefreshFeeds },
+        "indicators" when StrArg(1) == "add" => new ApiRequest { Cmd = ApiCommands.AddIndicator, Value = StrArg(2) },
+        "indicators" when StrArg(1) == "remove" => new ApiRequest { Cmd = ApiCommands.RemoveIndicator, Value = StrArg(2) },
+        "indicators" => new ApiRequest { Cmd = ApiCommands.Indicators },
+        "usage" => new ApiRequest { Cmd = ApiCommands.Usage, Hours = IntOption("--hours") ?? 24, Limit = IntOption("--limit") ?? 20 },
+        "digest" => new ApiRequest { Cmd = ApiCommands.Digest, Hours = IntOption("--hours") ?? 24 },
         _ => null,
     };
     if (request is null)
@@ -94,7 +99,27 @@ try
             break;
         case "connections":
             foreach (var c in data.Value.Deserialize<List<ConnectionRecord>>(ApiJson.Options)!.AsEnumerable().Reverse())
-                Console.WriteLine($"{c.Time:MM-dd HH:mm:ss}  {(c.Direction == "Outbound" ? "OUT" : "IN "),-3} {c.Protocol,-3}  {Trunc($"{c.ProcessName} ({c.Pid})", 30),-30}  {c.RemoteIp + ":" + c.RemotePort,-28} {c.Domain ?? $"({c.Scope})"}{(c.Threat is null ? "" : $"  !! {c.Threat}")}");
+                Console.WriteLine($"{c.Time:MM-dd HH:mm:ss}  {(c.Direction == "Outbound" ? "OUT" : "IN "),-3} {c.Protocol,-3}  {Trunc($"{c.ProcessName} ({c.Pid})", 28),-28}  {c.RemoteIp + ":" + c.RemotePort,-26} {Trunc(c.Domain ?? $"({c.Scope})", 34),-34} {Trunc(string.Join(", ", new[] { c.Country, c.Network }.Where(s => !string.IsNullOrEmpty(s))), 40)}{(c.Threat is null ? "" : $"  !! {c.Threat}")}");
+            break;
+        case "indicators":
+            var indicators = data.Value.Deserialize<List<string>>(ApiJson.Options)!;
+            Console.WriteLine(indicators.Count == 0 ? "Your custom blocklist is empty." : string.Join(Environment.NewLine, indicators));
+            break;
+        case "usage":
+            Console.WriteLine($"{"Program",-32} {"Sent",10} {"Received",10}");
+            foreach (var u in data.Value.Deserialize<List<AppUsage>>(ApiJson.Options)!)
+                Console.WriteLine($"{Trunc(u.ProcessName, 32),-32} {Bytes(u.BytesSent),10} {Bytes(u.BytesReceived),10}");
+            break;
+        case "digest":
+            var d = data.Value.Deserialize<DigestDto>(ApiJson.Options)!;
+            Console.WriteLine($"Since {d.Since:g}: {d.Summary}");
+            Console.WriteLine($"Connections recorded: {d.Connections:N0}. Blocked programs: {d.BlockedPrograms}. {(d.IsLearning ? $"Learning until {d.LearningEndsAt:g}." : "")}");
+            foreach (var a in d.NotableAlerts) Console.WriteLine($"  {a}");
+            if (d.IsLearning && d.NewPrograms.Count > 0)
+                Console.WriteLine($"  {d.NewPrograms.Count} programs seen for the first time (normal while learning).");
+            else
+                foreach (var p in d.NewPrograms) Console.WriteLine($"  New program: {p.ProcessName} ({p.Signer ?? "unsigned/unknown"})");
+            foreach (var t in d.TopTalkers) Console.WriteLine($"  Traffic: {t.ProcessName} sent {Bytes(t.BytesSent)}, received {Bytes(t.BytesReceived)}");
             break;
         case "apps":
             foreach (var a in data.Value.Deserialize<List<AppRecord>>(ApiJson.Options)!)
@@ -120,6 +145,8 @@ catch (TimeoutException)
 static Severity? ParseSeverity(string? s) => Enum.TryParse<Severity>(s, ignoreCase: true, out var v) ? v : null;
 
 static string Trunc(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+
+static string Bytes(long b) => UploadVolumeDetector.FormatBytes(b);
 
 static void PrintStatus(StatusDto s)
 {
@@ -171,6 +198,9 @@ static void PrintHelp()
           block <alertId> | --path <exe>      block a program in Windows Firewall
           unblock <exe>
           blocks
+          usage [--hours N]                   data sent/received per program
+          digest [--hours N]                  summary of the last day
+          indicators [add|remove <ip|cidr|domain>]   your custom blocklist
           end-learning | restart-learning | refresh-feeds
           watch                               stream new alerts
           --json                              raw JSON output

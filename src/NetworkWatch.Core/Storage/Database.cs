@@ -87,7 +87,24 @@ public sealed class Database
             CREATE TABLE IF NOT EXISTS trust (
                 app_key TEXT NOT NULL, detector_id TEXT NOT NULL, created INTEGER NOT NULL,
                 PRIMARY KEY (app_key, detector_id));
+            CREATE TABLE IF NOT EXISTS usage (
+                app_key TEXT NOT NULL, hour INTEGER NOT NULL, process_name TEXT NOT NULL,
+                sent INTEGER NOT NULL, received INTEGER NOT NULL,
+                PRIMARY KEY (app_key, hour));
+            CREATE INDEX IF NOT EXISTS ix_usage_hour ON usage(hour);
             """);
+
+        // Additive migrations for databases created by earlier versions.
+        AddColumn(db, "apps", "max_hourly_upload", "INTEGER NOT NULL DEFAULT 0");
+        AddColumn(db, "connections", "country", "TEXT");
+        AddColumn(db, "connections", "network", "TEXT");
+    }
+
+    private static void AddColumn(SqliteConnection db, string table, string column, string definition)
+    {
+        using var check = Command(db, $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $c", ("$c", column));
+        if ((long)check.ExecuteScalar()! == 0)
+            Execute(db, $"ALTER TABLE {table} ADD COLUMN {column} {definition}");
     }
 
     internal static void Execute(SqliteConnection db, string sql, params (string Name, object? Value)[] parameters)
@@ -131,5 +148,6 @@ public sealed class Database
         using var db = Open();
         Execute(db, "DELETE FROM connections WHERE time < $t", ("$t", ToUnixMs(connectionsBefore)));
         Execute(db, "DELETE FROM alerts WHERE last_seen < $t", ("$t", ToUnixMs(alertsBefore)));
+        Execute(db, "DELETE FROM usage WHERE hour < $h", ("$h", connectionsBefore.ToUnixTimeSeconds() / 3600));
     }
 }

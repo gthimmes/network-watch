@@ -1,15 +1,45 @@
+using NetworkWatch.Core.Intel;
 using NetworkWatch.Core.Storage;
 
 namespace NetworkWatch.Core.Api;
+
+public sealed record DigestDto(
+    DateTimeOffset Since,
+    bool IsLearning,
+    DateTimeOffset LearningEndsAt,
+    int High,
+    int Medium,
+    int Info,
+    IReadOnlyList<string> NotableAlerts,
+    IReadOnlyList<AppRecord> NewPrograms,
+    IReadOnlyList<AppUsage> TopTalkers,
+    long Connections,
+    int BlockedPrograms)
+{
+    /// <summary>One or two plain sentences for a notification.</summary>
+    public string Summary
+    {
+        get
+        {
+            var parts = new List<string>();
+            parts.Add(High + Medium == 0 ? "Nothing suspicious" : $"{High} high and {Medium} medium alert(s)");
+            // While learning, every program is "new"; that's not news.
+            if (NewPrograms.Count > 0 && !IsLearning) parts.Add($"{NewPrograms.Count} new program(s) went online");
+            if (TopTalkers.Count > 0) parts.Add($"busiest: {TopTalkers[0].ProcessName} ({UploadVolumeDetector.FormatBytes(TopTalkers[0].BytesSent + TopTalkers[0].BytesReceived)})");
+            return string.Join("; ", parts) + ".";
+        }
+    }
+}
 
 /// <summary>Transport-independent command handling for the local API.</summary>
 public sealed class ApiHandler(
     AlertStore alerts,
     ConnectionStore connections,
+    UsageStore usage,
     Baseline baseline,
+    FeedManager feeds,
     IEnforcer? enforcer,
-    Func<StatusDto> status,
-    Func<CancellationToken, Task> refreshFeeds)
+    Func<StatusDto> status)
 {
     public async Task<object?> HandleAsync(ApiRequest request, bool trustedClient, CancellationToken ct)
     {
@@ -17,6 +47,7 @@ public sealed class ApiHandler(
             throw new ApiException($"'{request.Cmd}' is only allowed from Network Watch's installed tray app or CLI.");
 
         var limit = Math.Clamp(request.Limit ?? 100, 1, 5000);
+        var since = DateTimeOffset.Now.AddHours(-Math.Clamp(request.Hours ?? 24, 1, 24 * 90));
         switch (request.Cmd)
         {
             case ApiCommands.Status:
@@ -41,6 +72,12 @@ public sealed class ApiHandler(
 
             case ApiCommands.Apps:
                 return baseline.Apps();
+
+            case ApiCommands.Usage:
+                return usage.Totals(since, limit);
+
+            case ApiCommands.Digest:
+                return Digest(since);
 
             case ApiCommands.Trust:
             {
@@ -84,6 +121,19 @@ public sealed class ApiHandler(
             case ApiCommands.Blocks:
                 return RequireEnforcer().ListRules();
 
+            case ApiCommands.Indicators:
+                return feeds.CustomIndicators();
+
+            case ApiCommands.AddIndicator:
+                try { feeds.AddCustomIndicator(request.Value ?? throw new ApiException("addIndicator needs a value.")); }
+                catch (ArgumentException ex) { throw new ApiException(ex.Message); }
+                return feeds.CustomIndicators();
+
+            case ApiCommands.RemoveIndicator:
+                if (!feeds.RemoveCustomIndicator(request.Value ?? throw new ApiException("removeIndicator needs a value.")))
+                    throw new ApiException($"'{request.Value}' isn't on your custom list.");
+                return feeds.CustomIndicators();
+
             case ApiCommands.EndLearning:
                 baseline.EndLearning(DateTimeOffset.Now);
                 return status();
@@ -93,12 +143,29 @@ public sealed class ApiHandler(
                 return status();
 
             case ApiCommands.RefreshFeeds:
-                await refreshFeeds(ct).ConfigureAwait(false);
+                await feeds.RefreshAsync(TimeSpan.Zero, ct).ConfigureAwait(false);
                 return status();
 
             default:
                 throw new ApiException($"Unknown command '{request.Cmd}'.");
         }
+    }
+
+    public DigestDto Digest(DateTimeOffset since)
+    {
+        var raised = alerts.RaisedSince(since);
+        return new DigestDto(
+            since,
+            baseline.IsLearning(DateTimeOffset.Now),
+            baseline.LearningEndsAt,
+            raised.Count(a => a.Severity == Severity.High),
+            raised.Count(a => a.Severity == Severity.Medium),
+            raised.Count(a => a.Severity == Severity.Info),
+            raised.Where(a => a.Severity >= Severity.Medium).Take(5).Select(a => $"[{a.Severity}] {a.Title}").ToList(),
+            baseline.Apps().Where(a => a.FirstSeen >= since).ToList(),
+            usage.Totals(since, 5),
+            connections.CountSince(since),
+            enforcer?.ListRules().Select(r => r.ProcessPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() ?? 0);
     }
 
     private Alert RequireAlert(ApiRequest request) =>

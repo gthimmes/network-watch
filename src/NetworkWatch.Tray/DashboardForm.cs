@@ -9,13 +9,14 @@ internal sealed class DashboardForm : Form
 {
     private readonly Func<Func<NetworkWatchClient, Task>, string?, Task> _run;
     private readonly Label _statusLabel = new() { Dock = DockStyle.Top, Height = 44, Padding = new Padding(10, 6, 10, 0) };
-    private readonly ListView _alerts = NewList(("When", 110), ("Severity", 70), ("Alert", 520), ("Count", 50), ("Status", 90));
+    private readonly ListView _alerts = NewList(("When", 110), ("Severity", 70), ("Alert", 520), ("Count", 50), ("Status", 110));
     private readonly TextBox _details = new() { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Segoe UI", 10) };
-    private readonly ListView _activity = NewList(("Time", 110), ("Dir", 40), ("Proto", 50), ("Program", 180), ("Remote", 200), ("Domain", 260), ("Signer", 180), ("Threat", 200));
+    private readonly ListView _activity = NewList(("Time", 110), ("Dir", 40), ("Proto", 50), ("Program", 170), ("Remote", 190), ("Domain", 240), ("Location", 220), ("Signer", 170), ("Threat", 200));
     private readonly TextBox _search = new() { PlaceholderText = "Filter by program, domain or IP…", Width = 320 };
-    private readonly ListView _apps = NewList(("Program", 200), ("Signed by", 220), ("First seen", 120), ("Last seen", 120), ("Trusted", 60), ("Path", 420));
+    private readonly ListView _apps = NewList(("Program", 190), ("Signed by", 210), ("Sent 24h", 80), ("Received 24h", 90), ("First seen", 110), ("Last seen", 110), ("Trusted", 60), ("Path", 380));
     private readonly ListView _blocks = NewList(("Rule", 320), ("Direction", 80), ("Program", 520));
     private readonly CheckBox _showInfo = new() { Text = "Show info-level", AutoSize = true };
+    private readonly CheckBox _showAcknowledged = new() { Text = "Show acknowledged", AutoSize = true };
     private List<Alert> _alertData = [];
     private long? _pendingSelect;
 
@@ -38,7 +39,11 @@ internal sealed class DashboardForm : Form
         Controls.Add(tabs);
         Controls.Add(_statusLabel);
 
-        Shown += async (_, _) => await LoadAlertsAsync();
+        Shown += async (_, _) =>
+        {
+            if (await Fetch<StatusDto>(new ApiRequest { Cmd = ApiCommands.Status }) is { } status) OnStatus(status);
+            await LoadAlertsAsync();
+        };
     }
 
     public void OnNewAlert()
@@ -82,6 +87,8 @@ internal sealed class DashboardForm : Form
         buttons.Controls.Add(Button("Acknowledge all", async () => { await _run(c => c.CallRawAsync(new ApiRequest { Cmd = ApiCommands.AckAll }), null); await LoadAlertsAsync(); }));
         _showInfo.CheckedChanged += async (_, _) => await LoadAlertsAsync();
         buttons.Controls.Add(_showInfo);
+        _showAcknowledged.CheckedChanged += async (_, _) => await LoadAlertsAsync();
+        buttons.Controls.Add(_showAcknowledged);
 
         split.Panel2.Controls.Add(_details);
         split.Panel2.Controls.Add(buttons);
@@ -98,6 +105,7 @@ internal sealed class DashboardForm : Form
             {
                 Cmd = ApiCommands.Alerts, Limit = 500, MinSeverity = _showInfo.Checked ? Severity.Info : Severity.Medium,
             }) ?? [];
+            if (!_showAcknowledged.Checked) _alertData = _alertData.Where(a => a.Status == AlertStatus.New).ToList();
         }
         catch (Exception ex)
         {
@@ -119,7 +127,7 @@ internal sealed class DashboardForm : Form
             if (a.Id == selectId) item.Selected = true;
         }
         _alerts.EndUpdate();
-        if (_alerts.SelectedItems.Count == 0) _details.Text = _alertData.Count == 0 ? "No alerts. 🎉" : "Select an alert to see what happened and what to do.";
+        if (_alerts.SelectedItems.Count == 0) _details.Text = _alertData.Count == 0 ? (_showAcknowledged.Checked ? "No alerts." : "Nothing new to review. Tick \"Show acknowledged\" to see past alerts.") : "Select an alert to see what happened and what to do.";
         else _alerts.SelectedItems[0].EnsureVisible();
     }
 
@@ -166,7 +174,8 @@ internal sealed class DashboardForm : Form
         Fill(_activity, rows, c =>
         [
             c.Time.ToString("MM-dd HH:mm:ss"), c.Direction == "Outbound" ? "out" : "in", c.Protocol, $"{c.ProcessName} ({c.Pid})",
-            $"{c.RemoteIp}:{c.RemotePort}", c.Domain ?? $"({c.Scope})", c.Signer ?? c.Signature, c.Threat ?? "",
+            $"{c.RemoteIp}:{c.RemotePort}", c.Domain ?? $"({c.Scope})",
+            string.Join(", ", new[] { c.Country, c.Network }.Where(s => !string.IsNullOrEmpty(s))), c.Signer ?? c.Signature, c.Threat ?? "",
         ], c => c.Threat is not null ? Color.Firebrick : null);
     }
 
@@ -191,10 +200,14 @@ internal sealed class DashboardForm : Form
     private async Task LoadAppsAsync()
     {
         var rows = await Fetch<List<AppRecord>>(new ApiRequest { Cmd = ApiCommands.Apps });
+        var usage = (await Fetch<List<AppUsage>>(new ApiRequest { Cmd = ApiCommands.Usage, Hours = 24, Limit = 1000 }) ?? [])
+            .ToDictionary(u => u.AppKey);
         Fill(_apps, rows, a =>
         [
-            a.ProcessName, a.Signer ?? "(unsigned / unknown)", a.FirstSeen.ToString("MM-dd HH:mm"), a.LastSeen.ToString("MM-dd HH:mm"),
-            a.Trusted ? "yes" : "", a.ProcessPath ?? "",
+            a.ProcessName, a.Signer ?? "(unsigned / unknown)",
+            usage.TryGetValue(a.AppKey, out var u) ? UploadVolumeDetector.FormatBytes(u.BytesSent) : "",
+            usage.TryGetValue(a.AppKey, out var v) ? UploadVolumeDetector.FormatBytes(v.BytesReceived) : "",
+            a.FirstSeen.ToString("MM-dd HH:mm"), a.LastSeen.ToString("MM-dd HH:mm"), a.Trusted ? "yes" : "", a.ProcessPath ?? "",
         ], a => a.Signer is null ? Color.DarkGoldenrod : null);
     }
 

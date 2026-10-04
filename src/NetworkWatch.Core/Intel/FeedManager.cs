@@ -78,5 +78,53 @@ public sealed class FeedManager(
         return LoadFromCache();
     }
 
+    // ── Custom list ─────────────────────────────────────────────────────────
+
+    private readonly Lock _customLock = new();
+
+    public IReadOnlyList<string> CustomIndicators()
+    {
+        lock (_customLock)
+            return File.Exists(customListPath)
+                ? File.ReadAllLines(customListPath).Select(l => l.Trim()).Where(l => l.Length > 0 && l[0] != '#').ToList()
+                : [];
+    }
+
+    /// <summary>Adds an IP, CIDR or domain to the custom list and reloads. Throws on invalid input.</summary>
+    public void AddCustomIndicator(string value)
+    {
+        value = value.Trim().ToLowerInvariant();
+        if (!new ThreatIntelBuilder().AddNetwork(value, new ThreatIndicator("custom", ThreatCategory.Custom, "")) &&
+            !new ThreatIntelBuilder().AddDomain(value, new ThreatIndicator("custom", ThreatCategory.Custom, "")))
+            throw new ArgumentException($"'{value}' isn't an IP address, CIDR range or domain name.");
+        lock (_customLock)
+        {
+            var existing = CustomIndicators();
+            if (existing.Contains(value, StringComparer.OrdinalIgnoreCase)) return;
+            WriteCustom([.. existing, value]);
+        }
+        LoadFromCache();
+    }
+
+    public bool RemoveCustomIndicator(string value)
+    {
+        bool removed;
+        lock (_customLock)
+        {
+            var existing = CustomIndicators().ToList();
+            removed = existing.RemoveAll(v => v.Equals(value.Trim(), StringComparison.OrdinalIgnoreCase)) > 0;
+            if (removed) WriteCustom(existing);
+        }
+        if (removed) LoadFromCache();
+        return removed;
+    }
+
+    private void WriteCustom(IEnumerable<string> values)
+    {
+        var temp = customListPath + ".tmp";
+        File.WriteAllLines(temp, ["# Your custom blocklist: one IP, CIDR range or domain per line. Managed with 'nwctl indicators'.", .. values]);
+        File.Move(temp, customListPath, overwrite: true);
+    }
+
     private string CachePath(FeedDefinition feed) => Path.Combine(cacheDirectory, feed.Name + ".txt");
 }

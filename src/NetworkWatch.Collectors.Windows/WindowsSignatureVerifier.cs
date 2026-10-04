@@ -36,13 +36,45 @@ public sealed partial class WindowsSignatureVerifier : ISignatureVerifier
             return new SignatureInfo(SignatureStatus.Signed, EmbeddedSigner(path));
 
         if ((uint)result is TrustENoSignature or TrustESubjectFormUnknown or TrustEProviderUnknown)
-            return IsCatalogSigned(path)
-                ? new SignatureInfo(SignatureStatus.Signed, IsUnderWindows(path) ? "Microsoft Windows (catalog)" : "Catalog-signed")
-                : new SignatureInfo(SignatureStatus.Unsigned, null);
+        {
+            if (IsCatalogSigned(path))
+                return new SignatureInfo(SignatureStatus.Signed, IsUnderWindows(path) ? "Microsoft Windows (catalog)" : "Catalog-signed");
+            if (StorePackagePublisher(path) is { } publisher)
+                return new SignatureInfo(SignatureStatus.Signed, $"{publisher} (Store package)");
+            return new SignatureInfo(SignatureStatus.Unsigned, null);
+        }
 
         return (uint)result is TrustEBadDigest or CertERevoked or TrustEExplicitDistrust or CertEUntrustedRoot
             ? new SignatureInfo(SignatureStatus.Invalid, EmbeddedSigner(path))
             : SignatureInfo.Unknown;
+    }
+
+    /// <summary>
+    /// MSIX/Store apps are signed as a whole package (AppxSignature.p7x), so individual files often have
+    /// no Authenticode signature. %ProgramFiles%\WindowsApps is writable only by the system's package
+    /// deployment, so a file there belongs to a verified package; report the package publisher.
+    /// </summary>
+    internal static string? StorePackagePublisher(string path)
+    {
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps") + "\\";
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return null;
+        var packageDir = path[root.Length..].Split('\\')[0];
+        var manifest = Path.Combine(root, packageDir, "AppxManifest.xml");
+        try
+        {
+            var identity = System.Xml.Linq.XDocument.Load(manifest).Root?.Elements().FirstOrDefault(e => e.Name.LocalName == "Identity");
+            var publisher = identity?.Attribute("Publisher")?.Value;
+            if (publisher is null) return "Unknown publisher";
+            var name = new X500DistinguishedName(publisher).EnumerateRelativeDistinguishedNames()
+                .Select(rdn => (Oid: rdn.GetSingleElementType().Value, Value: rdn.GetSingleElementValue()))
+                .OrderBy(x => x.Oid == "2.5.4.10" ? 0 : x.Oid == "2.5.4.3" ? 1 : 2)
+                .FirstOrDefault().Value;
+            return name ?? publisher;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static bool IsUnderWindows(string path) =>

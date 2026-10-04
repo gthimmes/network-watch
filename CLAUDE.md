@@ -22,13 +22,23 @@ Local network-monitoring tool: a Windows service watches every connection (per p
 | Firewall block/unblock (rules grouped "NetworkWatch") | Verified live |
 | Trusted-client gate for mutating API commands | Verified live |
 | Local API (named pipe) + `nwctl` CLI | Working |
-| Tray app (icon states, toasts with Block/Trust/Details, dashboard) | Deployed + autostart (HKCU Run); toast raised but not visually confirmed by owner yet |
+| Tray app (icon states, toasts with Block/Trust/Details, dashboard) | Deployed + autostart (HKCU Run). Dashboard visually verified via window capture; toast not yet confirmed by owner |
+| **Phase 2** (2026-10-03) | |
+| #10 upload-volume anomaly (per-app hourly upload vs learned max; ≥ max(5×, 250 MB)) | Unit tests; per-app usage verified live |
+| #11 DNS abuse: DGA (NXDOMAIN bursts of random-looking names) + tunneling (many long unique subdomains) | Unit tests; heuristic had 0 false positives on the 107 real domains seen on this PC |
+| #12 suspicious ports (4444, 1337, IRC, Tor, SOCKS, Telnet, outbound RDP/VNC), learned per app | Unit tests |
+| GeoIP/ASN (DB-IP lite, monthly) in alerts, Activity tab and DB | Verified live |
+| Store (MSIX) apps signed via package manifest publisher | Implemented (non-admin test can't list WindowsApps) |
+| Data dir ACL hardening (SYSTEM/Admins full, Users read) | Verified live (user write denied) |
+| Custom blocklist via API (`nwctl indicators add/remove`), trusted clients only | Verified live |
+| Per-app traffic (`nwctl usage`, Programs tab), daily digest (`nwctl digest`, tray toast after 9:00) | Verified live (digest toast pending first morning) |
+| Release zip + `install.ps1`/`uninstall.ps1`; dev deploys run the installer's elevated path | Built; elevated install path verified live; the UAC wrapper and uninstall are untested |
 
-Tests: `dotnet test NetworkWatch.slnx` → 71 passing.
+Tests: `dotnet test NetworkWatch.slnx` → 90 passing.
 
-After live testing, the custom list was cleared, test alerts acknowledged and **learning restarted: it ends 2026-10-10 15:16**.
+After live testing, the custom list was cleared, test alerts acknowledged and **learning restarted: it ends 2026-10-10 15:16**. The acknowledged test alerts from 2026-10-03 15:00–15:17 (nwtraffic/curl/example.edu/iana.org) remain in history. They age out after 90 days and appear in the digest until 2026-10-04 ~15:17.
 
-**Owner context:** personal use on the owner's own Windows 11 machine. Other OSes and headless servers come later, so keep the core portable (rules below). The owner runs the Windscribe VPN (WireGuard) and qBittorrent, which shape what "normal" looks like.
+**Owner context:** personal use on the owner's own Windows 11 machine. Other OSes and headless servers come later, so keep the core portable (rules below). The owner runs the Windscribe VPN (WireGuard), qBittorrent and Plex. They RDP into this PC from 192.168.50.136 on the LAN (TermService listening on 3389), which shapes what "normal" looks like.
 
 ## Layout
 
@@ -41,6 +51,7 @@ src/NetworkWatch.Tray                WinForms tray + toasts + dashboard (net10.0
 src/NetworkWatch.Spike               Phase 0 console (kept for ad-hoc ETW debugging)
 tools/NetworkWatch.TrafficGen        nwtraffic: benign test traffic (get / beacon / rawip / listen). Unsigned on purpose.
 tests/…                              Core tests (pipeline scenarios on real SQLite) + Windows real-OS tests (no admin needed)
+scripts/                             build-release.ps1, install.ps1, uninstall.ps1 (end-user install from a release zip)
 scripts/dev                          elevated dev harness (see below)
 ```
 
@@ -64,7 +75,9 @@ scripts/dev                          elevated dev harness (see below)
   - `networkwatch.db` (SQLite, WAL)
   - `logs\service-yyyyMMdd.log`
   - `feeds\` (cached feeds)
-  - `custom-indicators.txt` (one IP, CIDR or domain per line; run `nwctl refresh-feeds` after editing)
+  - `custom-indicators.txt` (managed with `nwctl indicators add|remove`)
+  - `geo` (DB-IP lite country + ASN databases, refreshed monthly)
+  - The folder is locked to SYSTEM/Admins write, Users read (the service enforces this at startup)
 - Logs and the DB are readable without admin. Use `nwctl` from Program Files for anything that changes state.
 
 ## Elevated dev runs without UAC (for Claude and humans)
@@ -112,16 +125,20 @@ dotnet publish tools\NetworkWatch.TrafficGen -c Release -o $env:TEMP\nwtest
 
 ## Known gaps / next steps
 
-1. Owner to confirm: toast appears for High alerts; Block/Trust/Details buttons; dashboard usability. After 2026-10-10, review the noise level of baseline alerts (direct-ip, new listeners, new apps) on real usage.
-2. Hardening:
-   - `%ProgramData%\NetworkWatch` inherits "Users: create files". The service should set a restrictive ACL on its data dir (custom list editing then moves to an API command).
-   - The service binary is framework-dependent; consider self-contained publishing for distribution.
-3. Phase 2 (PLAN.md §7):
-   - upload-volume anomaly
-   - DNS-abuse heuristics (DGA/tunneling)
-   - suspicious ports
-   - daily digest
-   - GeoIP/ASN enrichment (DB-IP lite, CC BY)
-   - VirusTotal/AbuseIPDB opt-in
-   - a real installer (MSI/MSIX) for non-dev installs
-4. Server story: `nwctl` already works headless. A Linux collector (eBPF or `/proc` + `ss`) would implement `ICollector`, plus a Unix-socket transport for the API.
+1. **Owner to confirm:**
+   - toast appears for High alerts, and the Block/Trust/Details buttons work
+   - daily digest toast (first one after 9:00)
+   - the RDP sessions from 192.168.50.136 are theirs
+   - after 2026-10-10, review the noise level of baseline alerts (direct-ip, new listeners, new apps, suspicious ports, upload volume) on real usage
+2. **Not built:**
+   - **VirusTotal/AbuseIPDB opt-in lookups.** Needs the owner's API key. Design: key in an admin-only config file; hash lookup for unsigned programs, appended to "untrusted program" alerts.
+   - **MSI/MSIX installer.** The zip + `install.ps1` covers personal use.
+   - **Code signing of our own binaries.** `NetworkWatch.Service.exe` shows as unsigned in its own Programs list.
+   - **Alert on new RDP/remote logon sources.** This PC accepts RDP from the LAN.
+3. **Release:**
+   - `scripts\build-release.ps1` creates `artifacts\release\NetworkWatch-<version>-win-x64.zip`.
+   - On a new machine: unzip, run `install.ps1` (one UAC prompt; offers to winget-install the .NET 10 Desktop Runtime).
+   - Remove with `"C:\Program Files\NetworkWatch\uninstall.ps1"` (`-RemoveData` also deletes history).
+4. **Server story:**
+   - `nwctl` already works headless.
+   - A Linux collector (eBPF or `/proc` + `ss`) would implement `ICollector`, plus a Unix-socket transport for the API.

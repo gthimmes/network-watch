@@ -49,18 +49,10 @@ try {
     switch ($op) {
         'install' {
             if (-not (Test-Path (Join-Path $source 'service\NetworkWatch.Service.exe'))) { throw "Not published: $source (run service.ps1, which publishes first)" }
-            Stop-NwService
-            New-Item -ItemType Directory -Force -Path $dest | Out-Null
-            robocopy $source $dest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
-            if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
-            if (-not (Get-Service $serviceName -ErrorAction SilentlyContinue)) {
-                Log 'creating service'
-                New-Service -Name $serviceName -BinaryPathName "`"$exe`"" -DisplayName 'Network Watch' `
-                    -Description 'Monitors network connections and alerts on suspicious activity.' -StartupType Automatic | Out-Null
-                sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/5000/restart/60000 | Out-Null
-            }
-            Start-Service $serviceName
-            Log 'started'
+            # Same code path as a real install, so dev deploys exercise the installer.
+            & (Join-Path $repo 'scripts\install.ps1') -Elevated -Source $source
+            if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed ($LASTEXITCODE); see $env:TEMP\NetworkWatch-install.log" }
+            Log 'installed via scripts\install.ps1 and started'
         }
         'restart' { Stop-NwService; Start-Service $serviceName; Log 'restarted' }
         'stop' { Stop-NwService; Log 'stopped' }

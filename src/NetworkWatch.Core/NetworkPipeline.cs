@@ -36,6 +36,8 @@ public sealed class NetworkPipeline
     private readonly FlowTracker _flows = new(TimeSpan.FromMinutes(2));
     private readonly ReorderBuffer<(ConnectionEvent Conn, AddressScope Scope, bool IsNewFlow)> _pending = new(ReorderHold);
     private readonly DateTimeOffset _startedAt;
+    private readonly UsageStore? _usage;
+    private readonly Func<System.Net.IPAddress, GeoInfo?> _geo;
     private DateTimeOffset _lastHousekeeping;
 
     public NetworkPipeline(
@@ -46,7 +48,9 @@ public sealed class NetworkPipeline
         ISignatureVerifier signatures,
         IReadOnlyList<Detector> detectors,
         ILogger logger,
-        DateTimeOffset startedAt)
+        DateTimeOffset startedAt,
+        UsageStore? usage = null,
+        Func<System.Net.IPAddress, GeoInfo?>? geo = null)
     {
         _baseline = baseline;
         _alerts = alerts;
@@ -57,6 +61,8 @@ public sealed class NetworkPipeline
         _logger = logger;
         _startedAt = startedAt;
         _lastHousekeeping = startedAt;
+        _usage = usage;
+        _geo = geo ?? (_ => null);
     }
 
     public PipelineStats Stats { get; } = new();
@@ -123,6 +129,13 @@ public sealed class NetworkPipeline
             case EnvironmentObservation observation:
                 RunDetectors(now, d => d.OnEnvironment(observation, Context(now)));
                 break;
+
+            case TrafficSample sample:
+                var key = AppKeys.For(sample.ProcessName, sample.ProcessPath);
+                _usage?.Add(key, sample.ProcessName, sample.Time, sample.BytesSent, sample.BytesReceived);
+                var traffic = new EnrichedTraffic(sample, key, _signatures.Verify(sample.ProcessPath));
+                RunDetectors(now, d => d.OnTraffic(traffic, Context(now)));
+                break;
         }
     }
 
@@ -137,6 +150,7 @@ public sealed class NetworkPipeline
             _flows.Prune(now);
             _dns.Prune(now - TimeSpan.FromHours(6));
             _alerts.PruneDedup(now);
+            _usage?.Flush();
             var ctx = Context(now);
             foreach (var detector in _detectors) detector.OnTick(ctx);
         }
@@ -151,7 +165,8 @@ public sealed class NetworkPipeline
         var appKey = AppKeys.For(c.ProcessName, c.ProcessPath);
         var isNewApp = isNewFlow && _baseline.TouchApp(appKey, c.ProcessName, c.ProcessPath, signature.Signer, now);
 
-        var enriched = new EnrichedConnection(c, scope, domain, signature, threat, isNewFlow, isNewApp, appKey);
+        var geo = scope == AddressScope.Public && isNewFlow ? _geo(c.Remote.Address) : null;
+        var enriched = new EnrichedConnection(c, scope, domain, signature, threat, isNewFlow, isNewApp, appKey, geo);
         if (isNewFlow && _connections is not null)
         {
             _connections.Insert(enriched);

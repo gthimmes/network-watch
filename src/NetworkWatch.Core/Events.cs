@@ -23,14 +23,28 @@ public sealed record ConnectionEvent(
     string? CommandLine = null,
     string? ParentProcessName = null) : NetEvent(Time, Pid);
 
-/// <summary>A completed DNS lookup made by a process, with the addresses it resolved to.</summary>
+/// <summary>
+/// A completed DNS lookup made by a process, with the addresses it resolved to.
+/// <see cref="NameNotFound"/> lookups (NXDOMAIN) have no addresses; bursts of them indicate DGA malware.
+/// </summary>
 public sealed record DnsResolution(
     DateTimeOffset Time,
     int Pid,
     string QueryName,
     IReadOnlyList<IPAddress> Addresses,
     string? ProcessName = null,
-    string? ProcessPath = null) : NetEvent(Time, Pid);
+    string? ProcessPath = null,
+    bool NameNotFound = false) : NetEvent(Time, Pid);
+
+/// <summary>Bytes exchanged by a process with one remote address since the previous sample (collectors aggregate ~30 s).</summary>
+public sealed record TrafficSample(
+    DateTimeOffset Time,
+    int Pid,
+    string ProcessName,
+    string? ProcessPath,
+    IPAddress Remote,
+    long BytesSent,
+    long BytesReceived) : NetEvent(Time, Pid);
 
 public sealed record Listener(Protocol Protocol, IPEndPoint Local, int Pid, string ProcessName, string? ProcessPath);
 

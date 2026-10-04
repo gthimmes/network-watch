@@ -27,11 +27,16 @@ public static class ApiCommands
     public const string RestartLearning = "restartLearning";
     public const string RefreshFeeds = "refreshFeeds";
     public const string Subscribe = "subscribe";
+    public const string Indicators = "indicators";
+    public const string AddIndicator = "addIndicator";
+    public const string RemoveIndicator = "removeIndicator";
+    public const string Usage = "usage";
+    public const string Digest = "digest";
 
     /// <summary>Commands that change behavior; only accepted from trusted (installed) clients.</summary>
     public static readonly IReadOnlySet<string> Mutating = new HashSet<string>
     {
-        Trust, Untrust, Block, Unblock, EndLearning, RestartLearning,
+        Trust, Untrust, Block, Unblock, EndLearning, RestartLearning, AddIndicator, RemoveIndicator,
     };
 }
 
@@ -48,6 +53,10 @@ public sealed record ApiRequest
     public string? Search { get; init; }
     public Severity? MinSeverity { get; init; }
     public long? AfterId { get; init; }
+    /// <summary>IP, CIDR or domain for indicator commands.</summary>
+    public string? Value { get; init; }
+    /// <summary>Look-back window in hours (usage, digest).</summary>
+    public int? Hours { get; init; }
 }
 
 public sealed record ApiResponse

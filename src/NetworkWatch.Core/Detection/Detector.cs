@@ -12,12 +12,14 @@ public sealed record EnrichedConnection(
     ThreatIndicator? Threat,
     bool IsNewFlow,
     bool IsNewApp,
-    string AppKey)
+    string AppKey,
+    GeoInfo? Geo = null)
 {
     /// <summary>Domain if known, else the IP, for display.</summary>
     public string Destination => Domain ?? Conn.Remote.Address.ToString();
 
-    public string DestinationWithPort => $"{Destination}:{Conn.Remote.Port}";
+    /// <summary>"example.com:443 (United States, Cloudflare, Inc.)" — location included when known.</summary>
+    public string DestinationWithPort => $"{Destination}:{Conn.Remote.Port}" + (Geo is null ? "" : $" ({Geo})");
 }
 
 public sealed record DetectionContext(
@@ -51,6 +53,7 @@ public abstract class Detector
     public virtual IEnumerable<Alert> OnDns(DnsResolution d, DetectionContext ctx) => [];
     public virtual IEnumerable<Alert> OnListeners(ListenerSnapshot s, DetectionContext ctx) => [];
     public virtual IEnumerable<Alert> OnEnvironment(EnvironmentObservation o, DetectionContext ctx) => [];
+    public virtual IEnumerable<Alert> OnTraffic(EnrichedTraffic t, DetectionContext ctx) => [];
 
     /// <summary>Called about once a minute for housekeeping.</summary>
     public virtual void OnTick(DetectionContext ctx) { }
@@ -91,7 +94,7 @@ public abstract class Detector
         $"{c.Conn.ProcessName} (PID {c.Conn.Pid}{(c.Conn.ProcessPath is null ? "" : $", {c.Conn.ProcessPath}")}" +
         $"{(c.Conn.ParentProcessName is null ? "" : $", started by {c.Conn.ParentProcessName}")})";
 
-    protected static string SignerText(SignatureInfo s) => s.Status switch
+    protected internal static string SignerText(SignatureInfo s) => s.Status switch
     {
         SignatureStatus.Signed => $"signed by {s.Signer ?? "a trusted publisher"}",
         SignatureStatus.Unsigned => "not digitally signed",

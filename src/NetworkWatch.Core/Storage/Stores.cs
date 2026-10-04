@@ -9,21 +9,21 @@ public sealed class ConnectionStore(Database database)
         using var db = database.Open();
         Database.Execute(db, """
             INSERT INTO connections(time, pid, process_name, process_path, protocol, direction, remote_ip, remote_port,
-                                    local_port, domain, scope, signer, signature, threat)
-            VALUES($time, $pid, $name, $path, $proto, $dir, $rip, $rport, $lport, $domain, $scope, $signer, $sig, $threat)
+                                    local_port, domain, scope, signer, signature, threat, country, network)
+            VALUES($time, $pid, $name, $path, $proto, $dir, $rip, $rport, $lport, $domain, $scope, $signer, $sig, $threat, $country, $network)
             """,
             ("$time", Database.ToUnixMs(c.Conn.Time)), ("$pid", c.Conn.Pid), ("$name", c.Conn.ProcessName), ("$path", c.Conn.ProcessPath),
             ("$proto", c.Conn.Protocol.ToString()), ("$dir", c.Conn.Direction.ToString()),
             ("$rip", c.Conn.Remote.Address.ToString()), ("$rport", c.Conn.Remote.Port), ("$lport", c.Conn.Local.Port),
             ("$domain", c.Domain), ("$scope", c.Scope.ToString()), ("$signer", c.Signature.Signer), ("$sig", c.Signature.Status.ToString()),
-            ("$threat", c.Threat?.Description));
+            ("$threat", c.Threat?.Description), ("$country", c.Geo?.Country ?? c.Geo?.CountryCode), ("$network", c.Geo?.Organization));
     }
 
     public IReadOnlyList<ConnectionRecord> Recent(int limit, string? search = null)
     {
         using var db = database.Open();
         var where = string.IsNullOrWhiteSpace(search) ? "" :
-            "WHERE process_name LIKE $q OR domain LIKE $q OR remote_ip LIKE $q OR process_path LIKE $q";
+            "WHERE process_name LIKE $q OR domain LIKE $q OR remote_ip LIKE $q OR process_path LIKE $q OR country LIKE $q OR network LIKE $q";
         using var cmd = Database.Command(db, $"SELECT * FROM connections {where} ORDER BY id DESC LIMIT $limit",
             ("$limit", limit), ("$q", $"%{search}%"));
         using var r = cmd.ExecuteReader();
@@ -34,8 +34,15 @@ public sealed class ConnectionStore(Database database)
                 r.GetString(r.GetOrdinal("process_name")), Str(r, "process_path"), r.GetString(r.GetOrdinal("protocol")),
                 r.GetString(r.GetOrdinal("direction")), r.GetString(r.GetOrdinal("remote_ip")), r.GetInt32(r.GetOrdinal("remote_port")),
                 r.GetInt32(r.GetOrdinal("local_port")), Str(r, "domain"), r.GetString(r.GetOrdinal("scope")), Str(r, "signer"),
-                r.GetString(r.GetOrdinal("signature")), Str(r, "threat")));
+                r.GetString(r.GetOrdinal("signature")), Str(r, "threat"), Str(r, "country"), Str(r, "network")));
         return list;
+    }
+
+    public long CountSince(DateTimeOffset since)
+    {
+        using var db = database.Open();
+        using var cmd = Database.Command(db, "SELECT COUNT(*) FROM connections WHERE time >= $t", ("$t", Database.ToUnixMs(since)));
+        return (long)cmd.ExecuteScalar()!;
     }
 
     internal static string? Str(SqliteDataReader r, string column)
@@ -108,6 +115,15 @@ public sealed class AlertStore(Database database)
         using var db = database.Open();
         using var cmd = Database.Command(db, "SELECT * FROM alerts WHERE id = $id", ("$id", id));
         return Read(cmd).FirstOrDefault();
+    }
+
+    /// <summary>Alerts first raised since <paramref name="since"/>.</summary>
+    public IReadOnlyList<Alert> RaisedSince(DateTimeOffset since)
+    {
+        using var db = database.Open();
+        using var cmd = Database.Command(db, "SELECT * FROM alerts WHERE first_seen >= $t ORDER BY severity DESC, last_seen DESC",
+            ("$t", Database.ToUnixMs(since)));
+        return Read(cmd);
     }
 
     public (int High, int Medium) CountUnacknowledged()

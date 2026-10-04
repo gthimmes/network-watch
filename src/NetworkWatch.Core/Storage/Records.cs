@@ -16,7 +16,9 @@ public sealed record ConnectionRecord(
     string Scope,
     string? Signer,
     string Signature,
-    string? Threat);
+    string? Threat,
+    string? Country = null,
+    string? Network = null);
 
 public sealed record AppRecord(
     string AppKey,

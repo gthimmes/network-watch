@@ -69,12 +69,14 @@ public sealed class FeedWorker(Engine engine, ILogger<FeedWorker> logger) : Back
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         engine.Feeds.LoadFromCache();
+        engine.Geo.Load();
         using var timer = new PeriodicTimer(TimeSpan.FromHours(1));
         do
         {
             try
             {
                 await engine.Feeds.RefreshAsync(TimeSpan.FromHours(6), ct).ConfigureAwait(false);
+                await engine.Geo.RefreshAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

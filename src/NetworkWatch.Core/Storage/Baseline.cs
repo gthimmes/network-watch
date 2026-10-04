@@ -34,6 +34,7 @@ public sealed class Baseline
         public DateTimeOffset LastSeen;
         public DateTimeOffset LastPersisted;
         public bool DirectIpOk;
+        public long MaxHourlyUpload;
     }
 
     public Baseline(Database db, DateTimeOffset now, TimeSpan? defaultLearningPeriod = null)
@@ -116,6 +117,27 @@ public sealed class Baseline
         }
     }
 
+    public long MaxHourlyUpload(string appKey)
+    {
+        lock (_lock) return _apps.TryGetValue(appKey, out var app) ? app.MaxHourlyUpload : 0;
+    }
+
+    /// <summary>
+    /// Raises the learned maximum hourly upload for an app (persisted at most every 10 minutes). Creates the
+    /// app entry if traffic is seen before any connection (e.g. connections already open at service start).
+    /// </summary>
+    public void RecordHourlyUpload(string appKey, string name, string? path, long bytes, DateTimeOffset now)
+    {
+        lock (_lock)
+        {
+            if (!_apps.TryGetValue(appKey, out var app))
+                _apps[appKey] = app = new AppState { Name = name, Path = path, FirstSeen = now, LastSeen = now };
+            if (bytes <= app.MaxHourlyUpload) return;
+            app.MaxHourlyUpload = bytes;
+            if (now - app.LastPersisted > TimeSpan.FromMinutes(10)) PersistApp(appKey, app);
+        }
+    }
+
     public IReadOnlyList<AppRecord> Apps()
     {
         lock (_lock)
@@ -129,12 +151,12 @@ public sealed class Baseline
         app.LastPersisted = app.LastSeen;
         using var db = _db.Open();
         Database.Execute(db, """
-            INSERT INTO apps(app_key, process_name, process_path, signer, first_seen, last_seen, direct_ip_ok)
-            VALUES($k, $n, $p, $s, $f, $l, $d)
-            ON CONFLICT(app_key) DO UPDATE SET last_seen = $l, signer = $s, direct_ip_ok = $d
+            INSERT INTO apps(app_key, process_name, process_path, signer, first_seen, last_seen, direct_ip_ok, max_hourly_upload)
+            VALUES($k, $n, $p, $s, $f, $l, $d, $u)
+            ON CONFLICT(app_key) DO UPDATE SET last_seen = $l, signer = $s, direct_ip_ok = $d, max_hourly_upload = $u
             """,
             ("$k", key), ("$n", app.Name), ("$p", app.Path), ("$s", app.Signer), ("$f", Database.ToUnixMs(app.FirstSeen)),
-            ("$l", Database.ToUnixMs(app.LastSeen)), ("$d", app.DirectIpOk ? 1 : 0));
+            ("$l", Database.ToUnixMs(app.LastSeen)), ("$d", app.DirectIpOk ? 1 : 0), ("$u", app.MaxHourlyUpload));
     }
 
     // ── Listeners ───────────────────────────────────────────────────────────
@@ -205,7 +227,7 @@ public sealed class Baseline
     private void Load()
     {
         using var db = _db.Open();
-        using (var cmd = Database.Command(db, "SELECT app_key, process_name, process_path, signer, first_seen, last_seen, direct_ip_ok FROM apps"))
+        using (var cmd = Database.Command(db, "SELECT app_key, process_name, process_path, signer, first_seen, last_seen, direct_ip_ok, max_hourly_upload FROM apps"))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
                 _apps[r.GetString(0)] = new AppState
@@ -217,6 +239,7 @@ public sealed class Baseline
                     LastSeen = Database.FromUnixMs(r.GetInt64(5)),
                     LastPersisted = Database.FromUnixMs(r.GetInt64(5)),
                     DirectIpOk = r.GetInt64(6) != 0,
+                    MaxHourlyUpload = r.GetInt64(7),
                 };
         using (var cmd = Database.Command(db, "SELECT key FROM listeners"))
         using (var r = cmd.ExecuteReader())

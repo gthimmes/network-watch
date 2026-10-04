@@ -33,6 +33,29 @@ public class WindowsSystemTests
     }
 
     [Fact]
+    public void StoreAppFilesWithoutEmbeddedSignatureAreSignedByPackage()
+    {
+        var windowsApps = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps");
+        string[] exes;
+        try { exes = Directory.GetFiles(windowsApps, "*.exe", SearchOption.AllDirectories); }
+        catch (UnauthorizedAccessException) { return; } // listing WindowsApps can be denied; covered live instead
+        var unsignedInStore = exes.FirstOrDefault(e => !IsEmbeddedSigned(e));
+        if (unsignedInStore is null) return;
+
+        var info = WindowsSignatureVerifier.VerifyUncached(unsignedInStore);
+        Assert.Equal(SignatureStatus.Signed, info.Status);
+        Assert.EndsWith("(Store package)", info.Signer);
+
+        static bool IsEmbeddedSigned(string file)
+        {
+#pragma warning disable SYSLIB0057 // reads the Authenticode signer; no replacement API
+            try { System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(file); return true; }
+#pragma warning restore SYSLIB0057
+            catch (Exception) { return false; }
+        }
+    }
+
+    [Fact]
     public void LocallyBuiltBinaryIsUnsignedAndMissingPathIsUnknown()
     {
         // Our own freshly built assembly is never signed.
